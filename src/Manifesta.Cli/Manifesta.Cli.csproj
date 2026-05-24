@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>manifesta</AssemblyName>
+    <RootNamespace>Manifesta.Cli</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
+    <PackageReference Include="YamlDotNet"         Version="16.3.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Manifesta.Core\Manifesta.Core.csproj" />
+    <ProjectReference Include="..\Manifesta.Providers\Manifesta.Providers.csproj" />
+    <ProjectReference Include="..\Manifesta.Doc\Manifesta.Doc.csproj" />
+  </ItemGroup>
+</Project>

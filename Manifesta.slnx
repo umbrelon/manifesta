@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Manifesta.Core/Manifesta.Core.csproj" />
+    <Project Path="src/Manifesta.Providers/Manifesta.Providers.csproj" />
+    <Project Path="src/Manifesta.Doc/Manifesta.Doc.csproj" />
+    <Project Path="src/Manifesta.Cli/Manifesta.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Manifesta.Core.Tests/Manifesta.Core.Tests.csproj" />
+    <Project Path="tests/Manifesta.Doc.Tests/Manifesta.Doc.Tests.csproj" />
+    <Project Path="tests/Manifesta.Cli.Tests/Manifesta.Cli.Tests.csproj" />
+  </Folder>
+</Solution>
