@@ -191,6 +191,8 @@ Planned for upcoming releases:
 
 ## Documentation
 
+- [Example Registry](docs/example-registry.md) — complete two-table registry with section, ERD, and generated output
+- [Common Workflows](docs/workflows.md) — first-time setup, CI validation, docs regeneration, dbdocs.io migration
 - [Init Commands](docs/commands-init.md) — `init dbml`, `init prisma`
 - [Doc Command](docs/commands-doc.md) — `doc db`
 - [Validate Commands](docs/commands-validate.md) — `validate schema`, `validate all`, `validate cross`

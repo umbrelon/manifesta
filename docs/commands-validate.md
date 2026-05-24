@@ -102,10 +102,10 @@ manifesta validate all --output-dir ./reports
 {
   "generatedAt": "2026-05-24T10:30:00Z",
   "summary": {
-    "tablesScanned": 42,
-    "sectionsScanned": 5,
+    "tablesScanned": 12,
+    "sectionsScanned": 3,
     "errors": 1,
-    "warnings": 3,
+    "warnings": 1,
     "hasErrors": true,
     "hasWarnings": true
   },
@@ -114,6 +114,12 @@ manifesta validate all --output-dir ./reports
       "severity": "Error",
       "code": "PK-NULLABLE",
       "message": "Primary key field 'Id' cannot be nullable",
+      "file": "tables/dbo.Order.json"
+    },
+    {
+      "severity": "Warning",
+      "code": "SENS-PII-NO-DESCRIPTION",
+      "message": "PII field 'Email' has no description",
       "file": "tables/dbo.Customer.json"
     }
   ]
@@ -186,6 +192,35 @@ manifesta validate cross --output-dir ./reports
 | `TABLE-LABEL-FIELD-MISSING` | Warning | A table's `labelField` does not exist in its own fields |
 | `SECTION-UNDEFINED` | Warning | A table references a section name not defined in any section file |
 | `SECTION-TABLE-UNDEFINED` | Warning | A section lists a table name not present in the schema registry |
+
+**Output:** `cross-validation.json` — same structure as `validation.json`.
+
+```json
+{
+  "generatedAt": "2026-05-24T10:30:00Z",
+  "summary": {
+    "tablesScanned": 12,
+    "sectionsScanned": 3,
+    "errors": 1,
+    "warnings": 1,
+    "hasErrors": true,
+    "hasWarnings": false
+  },
+  "issues": [
+    {
+      "severity": "Error",
+      "code": "FK-TARGET-MISSING",
+      "message": "dbo.Order.StatusId references dbo.OrderStatus, which does not exist in the schema registry",
+      "file": "tables/dbo.Order.json"
+    },
+    {
+      "severity": "Warning",
+      "code": "SECTION-TABLE-UNDEFINED",
+      "message": "Section 'Billing' references dbo.Invoice, which is not present in the schema registry",
+      "file": "document-sections/Billing.json"
+    }
+  ]
+}
 
 > The full edition adds `API-DBTABLE-MISSING` and `API-DBTYPE-MISMATCH` checks when API definitions are present.
 

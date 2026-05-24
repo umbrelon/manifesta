@@ -8,6 +8,8 @@
 
 - [Concepts](#concepts)
 - [Minimal Working Example](#minimal-working-example)
+- [Example Registry](./example-registry.md) — complete two-table registry with section, ERD, and generated output
+- [Common Workflows](./workflows.md) — first-time setup, CI validation, docs regeneration, dbdocs.io migration
 - [Commands — Init](./commands-init.md)
   - [Init DBML](./commands-init.md#init-dbml)
   - [Init Prisma](./commands-init.md#init-prisma)
