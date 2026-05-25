@@ -15,6 +15,7 @@ Manifesta.Cli.GlobalOptionDefinitions.AddToCommand(root);
 
 // ─── Register subcommands ──────────────────────────────────────────────────
 root.AddCommand(new InitCommand());
+root.AddCommand(new DbCommand());
 root.AddCommand(new DocCommand());
 root.AddCommand(new ValidateCommand());
 root.AddCommand(new VersionCommand());

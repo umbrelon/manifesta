@@ -26,6 +26,8 @@ Manifesta OSS lets you bootstrap a schema registry from an existing DBML or Pris
 | `manifesta validate all` | Run the full per-table validation suite |
 | `manifesta validate cross` | Check FK targets, section membership, and cross-entity references |
 | `manifesta validate schema` | Export JSON Schema for IDE autocomplete |
+| `manifesta db drift --connection <cs>` | Compare repo definitions against a live MySQL or PostgreSQL database |
+| `manifesta db drift --input-dir <dir>` | Compare repo definitions against pre-exported JSON files (CI-friendly, no live connection) |
 
 ---
 
