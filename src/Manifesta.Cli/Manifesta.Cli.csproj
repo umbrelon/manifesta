@@ -7,6 +7,11 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>manifesta</AssemblyName>
     <RootNamespace>Manifesta.Cli</RootNamespace>
+    <!-- Single-file self-contained publish: dotnet publish -r <RID> -c Release -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />

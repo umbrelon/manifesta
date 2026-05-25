@@ -89,17 +89,32 @@ All of this is plain Markdown that renders on GitHub, GitLab, and Azure DevOps w
 
 ## Installation
 
-Manifesta requires [.NET 10 SDK](https://dotnet.microsoft.com/) or later.
+### Binary download — no runtime required
 
-Install as a global .NET tool:
+Manifesta ships as a **self-contained, single-file binary**. Download the binary for your platform from [GitHub Releases](https://github.com/umbrelon/manifesta/releases) and run it directly — no .NET installation, no dependencies, nothing to install first.
+
+| Platform | File |
+|----------|------|
+| Linux x64 | `manifesta-linux-x64` |
+| Linux ARM64 | `manifesta-linux-arm64` |
+| Windows x64 | `manifesta-win-x64.exe` |
+| macOS x64 | `manifesta-osx-x64` |
+| macOS ARM64 | `manifesta-osx-arm64` |
+
+```bash
+# Linux / macOS
+chmod +x manifesta-linux-x64
+./manifesta-linux-x64 --version
+
+# Or add it to PATH and use it as manifesta everywhere
+```
+
+### Via dotnet tool
+
+If you already have the [.NET 10 SDK](https://dotnet.microsoft.com/) installed, you can install from NuGet instead:
 
 ```bash
 dotnet tool install --global manifesta
-```
-
-Verify:
-
-```bash
 manifesta --version
 ```
 
@@ -135,6 +150,19 @@ For contributors — not required to use Manifesta:
 ```bash
 dotnet build
 dotnet test
+```
+
+To produce a self-contained single-file binary locally, pass a runtime identifier:
+
+```bash
+# Linux x64
+dotnet publish src/Manifesta.Cli -r linux-x64 -c Release
+
+# macOS ARM64
+dotnet publish src/Manifesta.Cli -r osx-arm64 -c Release
+
+# Windows x64
+dotnet publish src/Manifesta.Cli -r win-x64 -c Release
 ```
 
 The solution builds on Linux, Windows, and macOS.
