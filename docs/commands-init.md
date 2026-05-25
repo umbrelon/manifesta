@@ -8,7 +8,7 @@
 
 - [Init DBML](#init-dbml)
 - [Init Prisma](#init-prisma)
-- [Init DB](#init-db) *(full edition only)*
+- [Init DB](#init-db)
 
 ---
 
@@ -232,13 +232,12 @@ manifesta init db --provider postgres --connection-string "..." --overwrite
 
 **What is NOT imported:**
 
-- Reference table row data (use the full edition's `db export` for data capture)
+- Reference table row data — populate the `data` array in each `table.json` manually after import
 - Views are introspected as read-only table definitions; no special view metadata is preserved
 
 **SQL Server:**
 
-> SQL Server introspection requires the **full edition** of Manifesta.
-> See the [full edition documentation](https://github.com/umbrelon/manifesta-enterprise) for flags, usage, and SQL Server-specific options.
+> SQL Server is not currently supported by `init db`.
 
 **Exit codes:**
 

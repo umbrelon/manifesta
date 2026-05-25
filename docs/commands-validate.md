@@ -222,8 +222,6 @@ manifesta validate cross --output-dir ./reports
   ]
 }
 
-> The full edition adds `API-DBTABLE-MISSING` and `API-DBTYPE-MISMATCH` checks when API definitions are present.
-
 **When to use `validate all` vs `validate cross`:**
 
 | Command | What it validates |

@@ -55,18 +55,18 @@ Most schema tools assume a live database or a hosted service. Manifesta doesn't.
 Given a schema registry for two tables, `manifesta doc db` produces:
 
 ````markdown
-**Core identity**
+**Core**
 
 ```mermaid
 erDiagram
 direction LR
-    "dbo.Reseller" ||--o{ "dbo.ResellerId" : "lResellerId"
-    "dbo.Reseller" {
-        int lResellerID PK
+    "dbo.Customer" ||--o{ "dbo.Order" : "CustomerId"
+    "dbo.Customer" {
+        int Id PK
     }
-    "dbo.ResellerId" {
+    "dbo.Order" {
         uniqueidentifier Id PK
-        int lResellerId FK
+        int CustomerId FK
     }
 ```
 ````
@@ -75,23 +75,11 @@ Followed by a field table for each entity:
 
 | Field | Type | Nullable | Description |
 |-------|------|----------|-------------|
-| lResellerID | int | | The ID of the reseller (unique). |
-| szName | varchar(255) | ✓ | The display name of the reseller. |
-| lParentID | int | ✓ | Parent reseller ID — self-referencing hierarchy. |
+| Id | int | | Surrogate primary key. |
+| Name | varchar(255) | ✓ | Display name of the customer. |
+| Email | varchar(255) | ✓ | Contact email address. |
 
 All of this is plain Markdown that renders on GitHub, GitLab, and Azure DevOps wikis without any plugin.
-
----
-
-## Full edition
-
-The full (closed-source) edition of Manifesta adds:
-
-- **Live database introspection** — SQL Server via `db export`, `db merge`, `db drift` (merge/drift engine is OSS; SQL Server introspection is enterprise-only)
-- **API validation and documentation** — OpenAPI 3.x parsing, validation, Swagger UI generation
-- **AI description generation** — Auto-generate field and table descriptions via `ai describe`; discover missing FK relationships via `ai infer`
-- **Manifest generation** — Produce dependency-ordered manifests for data pipelines
-- **Multi-tenant drift analysis** — Compare schema definitions across tenant databases
 
 ---
 
@@ -177,20 +165,6 @@ flowchart LR
 ```
 
 The schema registry is the hub. The init commands populate it; the doc and validate commands read from it. No command writes to the registry except `init`.
-
----
-
-## Roadmap
-
-See [CHANGELOG.md](CHANGELOG.md) for what is already shipped.
-
-Planned for upcoming releases:
-
-- `db merge --input-dir` — merge pre-exported JSON schema snapshots into your registry (engine already OSS; CLI wiring planned)
-- `db drift --input-dir` — compare a pre-exported snapshot against your registry and report divergence (engine already OSS; CLI wiring planned)
-- `init openapi` — bootstrap an API registry from an OpenAPI 3.x spec
-- `doc api` — generate API documentation with Swagger UI
-- `ai describe` (OSS tier) — generate field and table descriptions via the Claude API
 
 ---
 
