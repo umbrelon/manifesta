@@ -1,0 +1,23 @@
+{
+  "$schemaVersion": "1.0",
+  "name": "dbo.OrderStatus",
+  "description": "Lookup table for order status values.",
+  "fields": [
+    {
+      "name": "lStatusID",
+      "type": "int",
+      "nullable": false,
+      "description": "Unique status identifier.",
+      "isPrimaryKey": true
+    },
+    {
+      "name": "szName",
+      "type": "varchar(50)",
+      "nullable": false,
+      "description": "Human-readable status label.",
+      "isMatchColumn": true
+    }
+  ],
+  "primaryKey": [ "lStatusID" ],
+  "sections": [ "orders" ]
+}

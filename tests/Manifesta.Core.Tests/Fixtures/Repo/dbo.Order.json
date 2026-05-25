@@ -1,0 +1,42 @@
+{
+  "$schemaVersion": "1.0",
+  "name": "dbo.Order",
+  "description": "Core order table for managing customer purchases.",
+  "fields": [
+    {
+      "name": "lOrderID",
+      "type": "int",
+      "nullable": false,
+      "description": "Unique order identifier.",
+      "isPrimaryKey": true
+    },
+    {
+      "name": "lStatusID",
+      "type": "smallint",
+      "nullable": false,
+      "description": "Current order status. References dbo.OrderStatus."
+    },
+    {
+      "name": "dtCreatedAt",
+      "type": "datetime",
+      "nullable": false,
+      "description": "UTC timestamp when the order was placed."
+    },
+    {
+      "name": "szLegacyCode",
+      "type": "varchar(20)",
+      "nullable": true,
+      "description": "Legacy migration reference. Kept for audit trail."
+    }
+  ],
+  "primaryKey": [ "lOrderID" ],
+  "foreignKeys": [
+    {
+      "sourceField": "lStatusID",
+      "targetTable": "dbo.OrderStatus",
+      "targetField": "lStatusID"
+    }
+  ],
+  "databaseTypes": [ "MSSQL" ],
+  "sections": [ "orders" ]
+}

@@ -1,0 +1,18 @@
+{
+  "$schemaVersion": "1.0",
+  "name": "dbo.Order",
+  "fields": [
+    { "name": "lOrderID",     "type": "int",       "nullable": false },
+    { "name": "lStatusID",    "type": "int",        "nullable": false },
+    { "name": "dtCreatedAt",  "type": "datetime",   "nullable": false },
+    { "name": "dtCancelledAt","type": "datetime",   "nullable": true  }
+  ],
+  "primaryKey": [ "lOrderID" ],
+  "foreignKeys": [
+    {
+      "sourceField": "lStatusID",
+      "targetTable": "dbo.OrderStatus",
+      "targetField": "lStatusID"
+    }
+  ]
+}

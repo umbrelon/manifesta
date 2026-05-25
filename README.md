@@ -87,7 +87,7 @@ All of this is plain Markdown that renders on GitHub, GitLab, and Azure DevOps w
 
 The full (closed-source) edition of Manifesta adds:
 
-- **Live database introspection** — SQL Server, MySQL, PostgreSQL via `init db`, `db export`, `db merge`, `db drift`
+- **Live database introspection** — SQL Server via `db export`, `db merge`, `db drift` (merge/drift engine is OSS; SQL Server introspection is enterprise-only)
 - **API validation and documentation** — OpenAPI 3.x parsing, validation, Swagger UI generation
 - **AI description generation** — Auto-generate field and table descriptions via `ai describe`; discover missing FK relationships via `ai infer`
 - **Manifest generation** — Produce dependency-ordered manifests for data pipelines
@@ -186,9 +186,10 @@ See [CHANGELOG.md](CHANGELOG.md) for what is already shipped.
 
 Planned for upcoming releases:
 
+- `db merge --input-dir` — merge pre-exported JSON schema snapshots into your registry (engine already OSS; CLI wiring planned)
+- `db drift --input-dir` — compare a pre-exported snapshot against your registry and report divergence (engine already OSS; CLI wiring planned)
 - `init openapi` — bootstrap an API registry from an OpenAPI 3.x spec
 - `doc api` — generate API documentation with Swagger UI
-- `validate drift` — compare the registry against a live database and report schema drift
 - `ai describe` (OSS tier) — generate field and table descriptions via the Claude API
 
 ---
