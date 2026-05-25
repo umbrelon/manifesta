@@ -25,6 +25,8 @@
   - [Computed Fields](./schema-features.md#computed-fields)
   - [Foreign Keys](./schema-features.md#configuring-foreign-keys-in-tablejson)
   - [ERD Diagrams](./schema-features.md#configuring-erd-diagrams-in-sectionjson)
+- [Configuration Reference](./config.md) — all `manifesta.config.json` properties
+- [table.json / section.json Reference](./table-json-reference.md) — complete field-level property reference
 
 ---
 

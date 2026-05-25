@@ -1,5 +1,10 @@
 # Manifesta OSS
 
+[![NuGet](https://img.shields.io/nuget/v/manifesta?label=manifesta&logo=nuget)](https://www.nuget.org/packages/manifesta)
+[![Build](https://img.shields.io/github/actions/workflow/status/rujasy/manifesta/ci.yml?branch=main&logo=github)](https://github.com/rujasy/manifesta/actions)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![.NET 10](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet)](https://dotnet.microsoft.com/)
+
 > Schema documentation engine — import, validate, and generate docs from your database schema
 
 Manifesta OSS lets you bootstrap a schema registry from an existing DBML or Prisma file, validate it against a ruleset, and generate Markdown documentation with embedded ERD diagrams — all without a live database connection.
@@ -90,51 +95,50 @@ The full (closed-source) edition of Manifesta adds:
 
 ---
 
-## Quick start
+## Installation
 
-**Import from DBML:**
+Manifesta requires [.NET 10 SDK](https://dotnet.microsoft.com/) or later.
 
-```bash
-manifesta init dbml --input database.dbml
-```
-
-This writes one `table.json` per table to `./tables/` and one `section.json` per `TableGroup` to `./document-sections/`.
-
-**Import from Prisma:**
+Install as a global .NET tool:
 
 ```bash
-manifesta init prisma --input ./prisma/schema.prisma
+dotnet tool install --global manifesta
 ```
 
-SQL types, primary keys, foreign keys, and native type overrides are inferred automatically from the `datasource` block.
-
-**Generate documentation:**
+Verify:
 
 ```bash
-manifesta doc db --output-dir ./docs
+manifesta --version
 ```
 
-Produces `database.md` with a hierarchical table of contents, per-table field listings, and embedded Mermaid ERD diagrams.
-
-**Validate:**
-
-```bash
-manifesta validate all --strict
-```
-
-Runs the full validation suite — PK/FK rules, reference data consistency, computed field correctness — and writes `validation.json`.
+No database connection is required for any OSS command.
 
 ---
 
-## Requirements
+## Quick start
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/) or later
+```bash
+# Import from DBML
+manifesta init dbml --input database.dbml
 
-No database connection required for OSS commands.
+# Import from Prisma
+manifesta init prisma --input ./prisma/schema.prisma
+
+# Generate documentation
+manifesta doc db --output-dir ./docs
+
+# Validate
+manifesta validate all --strict
+manifesta validate cross
+```
+
+See [Common Workflows](docs/workflows.md) for step-by-step guides including CI setup and dbdocs.io migration.
 
 ---
 
 ## Building from source
+
+For contributors — not required to use Manifesta:
 
 ```bash
 dotnet build
@@ -193,6 +197,8 @@ Planned for upcoming releases:
 
 - [Example Registry](docs/example-registry.md) — complete two-table registry with section, ERD, and generated output
 - [Common Workflows](docs/workflows.md) — first-time setup, CI validation, docs regeneration, dbdocs.io migration
+- [Configuration Reference](docs/config.md) — all `manifesta.config.json` properties
+- [table.json / section.json Reference](docs/table-json-reference.md) — complete field-level property reference
 - [Init Commands](docs/commands-init.md) — `init dbml`, `init prisma`
 - [Doc Command](docs/commands-doc.md) — `doc db`
 - [Validate Commands](docs/commands-validate.md) — `validate schema`, `validate all`, `validate cross`
