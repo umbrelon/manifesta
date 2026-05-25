@@ -251,6 +251,182 @@ public sealed class CliSmokeTests
         finally { Directory.Delete(tmp, recursive: true); }
     }
 
+    // ── db merge ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task DbMergeHelp_ExitsZeroAndListsProviders()
+    {
+        if (BinPath is null) return;
+        var (code, stdout, _) = await RunAsync("db", "merge", "--help");
+        code.Should().Be(0);
+        stdout.Should().Contain("mysql");
+        stdout.Should().Contain("postgres");
+        stdout.Should().NotContain("sqlserver");
+    }
+
+    [Fact]
+    public async Task DbMerge_NoFlags_ExitsWithConfigError()
+    {
+        if (BinPath is null) return;
+        var tmp = CreateTempRegistry(new());
+        try
+        {
+            var (code, _, stderr) = await RunAsync(tmp, "db", "merge");
+            code.Should().Be(4);
+            stderr.Should().Contain("--connection");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DbMerge_RemoveDeletedTablesWithoutRemoveDeletedColumns_ExitsWithConfigError()
+    {
+        if (BinPath is null) return;
+        var tmp = CreateTempRegistry(new());
+        try
+        {
+            var (code, _, stderr) = await RunAsync(tmp,
+                "db", "merge", "--input-dir", ".", "--remove-deleted-tables");
+            code.Should().Be(4);
+            stderr.Should().Contain("--remove-deleted-columns");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DbMerge_InputDir_NoChanges_ExitsZero()
+    {
+        if (BinPath is null) return;
+
+        const string tableJson = """
+            {
+              "name": "dbo.Customer",
+              "fields": [
+                { "name": "Id",   "type": "int",          "nullable": false },
+                { "name": "Name", "type": "varchar(255)", "nullable": true  }
+              ],
+              "primaryKey": ["Id"]
+            }
+            """;
+
+        var repo = new Dictionary<string, string> { ["dbo.Customer.json"] = tableJson };
+        var tmp  = CreateTempRegistry(repo);
+        var live = Path.Combine(tmp, "live");
+        Directory.CreateDirectory(live);
+        await File.WriteAllTextAsync(Path.Combine(live, "dbo.Customer.json"), tableJson);
+
+        try
+        {
+            var (code, stdout, _) = await RunAsync(tmp, "db", "merge", "--input-dir", live, "--no-report");
+            code.Should().Be(0);
+            stdout.Should().Contain("0 modified");
+            stdout.Should().Contain("0 created");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DbMerge_InputDir_NewTable_CreatesFileAndExitsZero()
+    {
+        if (BinPath is null) return;
+
+        const string liveJson = """
+            {
+              "name": "dbo.Order",
+              "fields": [{ "name": "Id", "type": "int", "nullable": false }],
+              "primaryKey": ["Id"]
+            }
+            """;
+
+        // Repo is empty; live has one table → should create a new file
+        var tmp  = CreateTempRegistry(new());
+        var live = Path.Combine(tmp, "live");
+        Directory.CreateDirectory(live);
+        await File.WriteAllTextAsync(Path.Combine(live, "dbo.Order.json"), liveJson);
+
+        try
+        {
+            var (code, stdout, _) = await RunAsync(tmp, "db", "merge", "--input-dir", live, "--no-report");
+            code.Should().Be(0);
+            stdout.Should().Contain("1 created");
+            File.Exists(Path.Combine(tmp, "tables", "dbo.Order.json")).Should().BeTrue();
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DbMerge_InputDir_TypeChanged_UpdatesFileAndExitsOne()
+    {
+        if (BinPath is null) return;
+
+        const string repoJson = """
+            {
+              "name": "dbo.Customer",
+              "fields": [
+                { "name": "Id",   "type": "int",          "nullable": false },
+                { "name": "Name", "type": "varchar(255)", "nullable": true  }
+              ],
+              "primaryKey": ["Id"]
+            }
+            """;
+
+        // Live DB changed Name to varchar(100) → merge updates the file; Name is
+        // also absent from live as an orphan (kept in repo) → warnings → exit 1
+        const string liveJson = """
+            {
+              "name": "dbo.Customer",
+              "fields": [
+                { "name": "Id",   "type": "int",          "nullable": false },
+                { "name": "Name", "type": "varchar(100)", "nullable": true  }
+              ],
+              "primaryKey": ["Id"]
+            }
+            """;
+
+        var repo = new Dictionary<string, string> { ["dbo.Customer.json"] = repoJson };
+        var tmp  = CreateTempRegistry(repo);
+        var live = Path.Combine(tmp, "live");
+        Directory.CreateDirectory(live);
+        await File.WriteAllTextAsync(Path.Combine(live, "dbo.Customer.json"), liveJson);
+
+        try
+        {
+            var (code, stdout, _) = await RunAsync(tmp, "db", "merge", "--input-dir", live, "--no-report");
+            code.Should().Be(0); // type change only → modified, no orphan warnings
+            stdout.Should().Contain("1 modified");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DbMerge_DryRun_DoesNotWriteFiles()
+    {
+        if (BinPath is null) return;
+
+        const string liveJson = """
+            {
+              "name": "dbo.Product",
+              "fields": [{ "name": "Id", "type": "int", "nullable": false }],
+              "primaryKey": ["Id"]
+            }
+            """;
+
+        var tmp  = CreateTempRegistry(new());
+        var live = Path.Combine(tmp, "live");
+        Directory.CreateDirectory(live);
+        await File.WriteAllTextAsync(Path.Combine(live, "dbo.Product.json"), liveJson);
+
+        try
+        {
+            var (code, _, _) = await RunAsync(tmp,
+                "db", "merge", "--input-dir", live, "--dry-run", "--no-report");
+            code.Should().Be(0);
+            // File must not have been written (dry-run)
+            File.Exists(Path.Combine(tmp, "tables", "dbo.Product.json")).Should().BeFalse();
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /// <summary>
