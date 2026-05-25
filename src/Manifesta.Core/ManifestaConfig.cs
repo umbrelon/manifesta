@@ -76,6 +76,9 @@ public sealed class ManifestaConfig
 
     [JsonPropertyName("sensitivity")]
     public SensitivityConfig? Sensitivity { get; set; }
+
+    [JsonPropertyName("tenants")]
+    public TenantConfig? Tenants { get; set; }
 }
 
 public sealed class ConfigPaths
@@ -187,4 +190,61 @@ public sealed class SensitivityConfig
     /// <summary>When <c>true</c> (default), PII fields without a description emit a warning.</summary>
     [JsonPropertyName("piiRequiresDescription")]
     public bool PiiRequiresDescription { get; set; } = true;
+}
+
+// ── Tenant configuration ──────────────────────────────────────────────────────
+
+/// <summary>
+/// Describes the multi-tenant topology: database types and database instances.
+/// Used by <c>db tenant-drift</c> for module-scoped drift detection across a tenant tree.
+/// </summary>
+public sealed class TenantConfig
+{
+    /// <summary>User-defined labels for classes of databases, with optional structural rules.</summary>
+    [JsonPropertyName("types")]
+    public Dictionary<string, TenantTypeDefinition> Types { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Named database instances with connection strings and installed modules.</summary>
+    [JsonPropertyName("databases")]
+    public Dictionary<string, TenantDatabaseEntry> Databases { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// Structural rules for a class of databases in the tenant topology.
+/// </summary>
+public sealed class TenantTypeDefinition
+{
+    /// <summary>When <c>true</c>, databases of this type are the tree root. Exactly one database in the topology must be of a root type.</summary>
+    [JsonPropertyName("root")]
+    public bool Root { get; set; }
+
+    /// <summary>Type names whose databases may be the direct parent of a database of this type.</summary>
+    [JsonPropertyName("allowedParents")]
+    public List<string> AllowedParents { get; set; } = [];
+
+    /// <summary>Section names that every database of this type must have installed.</summary>
+    [JsonPropertyName("requiredSections")]
+    public List<string> RequiredSections { get; set; } = [];
+}
+
+/// <summary>
+/// A named database instance in the tenant topology.
+/// </summary>
+public sealed class TenantDatabaseEntry
+{
+    /// <summary>Connection string for this database instance.</summary>
+    [JsonPropertyName("connection")]
+    public string Connection { get; set; } = "";
+
+    /// <summary>Type name from <see cref="TenantConfig.Types"/>.</summary>
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "";
+
+    /// <summary>Name of the parent database entry, or <c>null</c> for the root database.</summary>
+    [JsonPropertyName("parent")]
+    public string? Parent { get; set; }
+
+    /// <summary>Section names (module names) installed on this database.</summary>
+    [JsonPropertyName("sections")]
+    public List<string> Sections { get; set; } = [];
 }

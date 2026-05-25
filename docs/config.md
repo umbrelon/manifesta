@@ -33,6 +33,7 @@ Add to `.vscode/settings.json` to enable real-time validation in VS Code:
 - [output](#output)
 - [adapters](#adapters)
 - [naming](#naming)
+- [tenants](#tenants)
 - [Full example](#full-example)
 
 ---
@@ -122,6 +123,61 @@ Run `manifesta validate schema config --output-dir ./schemas` for the full JSON 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `naming.defaultSchema` | string | — | Schema prefix applied to unqualified table names during import. Equivalent to `--schema` on init commands. |
+
+---
+
+## tenants
+
+Declares the multi-tenant topology for the full edition's `db tenant-drift` command. Omit this section entirely if you are not using multi-tenant drift detection.
+
+> **Full edition only.** The `tenants` block is parsed and validated by `Manifesta.Core` (OSS), but the `db tenant-drift` command that reads it requires the full edition. OSS users can still declare the block and get IDE autocomplete and config validation via `manifesta validate schema config`.
+
+### tenants.types
+
+A dictionary of named database-class definitions. Each key is an arbitrary label you choose (e.g. `"central"`, `"partner"`).
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `root` | boolean | No | `false` | When `true`, databases of this type are the root of the topology tree. Exactly one type in the topology must have `"root": true`. |
+| `allowedParents` | string[] | No | `[]` | Type names whose databases may be the direct parent of a database of this type. Leave empty on the root type. |
+| `requiredSections` | string[] | No | `[]` | Section (module) names that every database of this type must have installed. Validated by `validate schema config`. |
+
+### tenants.databases
+
+A dictionary of named database instances. Each key is a logical name you choose (e.g. `"central-db"`, `"partner-eu"`).
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `type` | string | Yes | — | One of the keys declared in `tenants.types`. |
+| `connection` | string | Yes | — | Connection string for this database instance. Use environment variable substitution in CI rather than committing secrets. |
+| `parent` | string | No | — | Logical name of the parent database in the topology. Omit on the root database. |
+| `sections` | string[] | No | `[]` | Section (module) names installed on this database. Only tables belonging to these sections are checked for drift. |
+
+```json
+{
+  "tenants": {
+    "types": {
+      "central": { "root": true },
+      "partner": { "allowedParents": ["central"] }
+    },
+    "databases": {
+      "central-db": {
+        "type": "central",
+        "connection": "Server=central.db;Database=Main;...",
+        "sections": ["Core", "Billing"]
+      },
+      "partner-eu": {
+        "type": "partner",
+        "parent": "central-db",
+        "connection": "Server=eu.db;Database=PartnerEU;...",
+        "sections": ["Core"]
+      }
+    }
+  }
+}
+```
+
+> **Tip:** Mark sections as modules in your `section.json` files (`"isModule": true`) so tooling can distinguish installable modules from structural groupings used only for documentation.
 
 ---
 

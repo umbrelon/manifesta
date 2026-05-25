@@ -25,6 +25,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - Azure DevOps Markdown dialect (`:::mermaid` fences)
 - Dry-run mode (`--dry-run`) for all write operations
 - Global flags: `--config`, `--root`, `--verbose`, `--quiet`, `--warn-only`, `--dry-run`, `--force`, `--format`, `--pre-hook`, `--post-hook`
+- `isModule` on `section.json` — optional boolean that marks a section as an independently installable module; used by the full edition's `db tenant-drift` command; omitted from JSON when not set; no effect on OSS commands
+- `tenants` block in `manifesta.config.json` — declares a multi-tenant topology: named types (`root`, `allowedParents`, `requiredSections`) and named database instances (`type`, `connection`, `parent`, `sections`); parsed and validated by `Manifesta.Core`; `validate schema config` now emits the full JSON Schema for this block enabling IDE autocomplete; the `db tenant-drift` command that consumes it requires the full edition
 
 ---
 

@@ -339,6 +339,14 @@ public sealed record SectionDefinition
     public IReadOnlyList<ErdDefinition> Erds { get; init; } = [];
 
     public string SourceFile           { get; init; } = "";
+
+    /// <summary>
+    /// When <c>true</c>, this section represents a module that can be selectively installed
+    /// per database in multi-tenant deployments. Used by <c>db tenant-drift</c> for
+    /// module-scoped drift detection. Omitted in JSON when <c>null</c>.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? IsModule { get; init; }
 }
 
 // ─── API IR ───────────────────────────────────────────────────────────────

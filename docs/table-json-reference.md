@@ -91,6 +91,7 @@ manifesta validate schema section --output-dir ./schemas
 | `tables` | string[] | Yes | — | Ordered list of qualified table names belonging to this section. Each name must match a table in the registry — checked by `validate cross`. |
 | `description` | string | No | — | Section description rendered below the section heading in `database.md`, before the ERD diagrams. |
 | `erds` | ErdDefinition[] | No | `[]` | ERD diagrams to render for this section. Each entry produces one Mermaid diagram block. |
+| `isModule` | boolean | No | — | When `true`, marks this section as an independently installable module. Used by the full edition's `db tenant-drift` command to scope drift detection per database. Omitted from JSON when not set. |
 
 ---
 
