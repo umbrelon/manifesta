@@ -11,7 +11,13 @@ namespace Manifesta.Core.Drift;
 /// </summary>
 public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
 {
-    public string Generate(DriftSession session)
+    public string Generate(DriftSession session) =>
+        Generate(session, sourceLabel: "Repository", targetLabel: "Live Database");
+
+    public string Generate(
+        DriftSession session,
+        string sourceLabel,
+        string targetLabel)
     {
         var sb = new StringBuilder();
 
@@ -50,26 +56,28 @@ public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
                 AppendDriftedTable(sb, result, session.IncludeSchema);
         }
 
-        // ── Tables absent from DB ────────────────────────────────────────────────
+        // ── Tables absent from target ────────────────────────────────────────────
         if (session.MissingDbTables.Count > 0)
         {
-            sb.AppendLine("## Tables Absent from Database");
+            sb.AppendLine($"## Tables Absent from {targetLabel}");
             sb.AppendLine();
-            sb.AppendLine("These repo files describe tables that were **not found in the live database**.");
-            sb.AppendLine("Run `manifesta db merge` to reconcile, or remove the files manually.");
+            sb.AppendLine($"These tables are defined in {sourceLabel} but were **not found in {targetLabel}**.");
+            if (sourceLabel == "Repository")
+                sb.AppendLine("Run `manifesta db merge` to reconcile, or remove the files manually.");
             sb.AppendLine();
             foreach (var path in session.MissingDbTables)
                 sb.AppendLine($"- `{path}`");
             sb.AppendLine();
         }
 
-        // ── Warnings: extra DB tables ────────────────────────────────────────────
+        // ── Warnings: tables absent from source ──────────────────────────────────
         if (session.ExtraDbTables.Count > 0)
         {
-            sb.AppendLine("## Warnings: Tables Absent from Repo");
+            sb.AppendLine($"## Warnings: Tables Absent from {sourceLabel}");
             sb.AppendLine();
-            sb.AppendLine("These tables exist in the live database but have **no repo definition**.");
-            sb.AppendLine("Run `manifesta db merge` to create repo files for them.");
+            sb.AppendLine($"These tables exist in {targetLabel} but have **no {sourceLabel} definition**.");
+            if (sourceLabel == "Repository")
+                sb.AppendLine("Run `manifesta db merge` to create repo files for them.");
             sb.AppendLine();
             foreach (var name in session.ExtraDbTables)
                 sb.AppendLine($"- `{name}`");

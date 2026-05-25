@@ -335,7 +335,7 @@ public class DriftReportGeneratorTests
 
         var report = _generator.Generate(session);
 
-        report.Should().Contain("## Tables Absent from Database");
+        report.Should().Contain("## Tables Absent from Live Database");
         report.Should().Contain("`/repo/tables/dbo.Ghost.json`");
         report.Should().Contain("db merge");
     }
@@ -345,7 +345,7 @@ public class DriftReportGeneratorTests
     {
         var report = _generator.Generate(EmptySession());
 
-        report.Should().NotContain("## Tables Absent from Database");
+        report.Should().NotContain("## Tables Absent from Live Database");
     }
 
     // ── Extra DB tables (warnings) ────────────────────────────────────────────
@@ -360,7 +360,7 @@ public class DriftReportGeneratorTests
 
         var report = _generator.Generate(session);
 
-        report.Should().Contain("## Warnings: Tables Absent from Repo");
+        report.Should().Contain("## Warnings: Tables Absent from Repository");
         report.Should().Contain("`dbo.NewTable`");
         report.Should().Contain("`dbo.AnotherNew`");
     }
@@ -370,7 +370,27 @@ public class DriftReportGeneratorTests
     {
         var report = _generator.Generate(EmptySession());
 
-        report.Should().NotContain("## Warnings: Tables Absent from Repo");
+        report.Should().NotContain("## Warnings: Tables Absent from Repository");
+    }
+
+    // ── Custom labels (compare mode) ──────────────────────────────────────────
+
+    [Fact]
+    public void Generate_CustomLabels_UsedInSectionHeaders()
+    {
+        var session = EmptySession() with
+        {
+            MissingDbTables = ["dbo.Ghost"],
+            ExtraDbTables   = ["dbo.NewTable"],
+        };
+
+        var report = _generator.Generate(session, sourceLabel: "Source", targetLabel: "Target");
+
+        report.Should().Contain("## Tables Absent from Target");
+        report.Should().Contain("## Warnings: Tables Absent from Source");
+        report.Should().NotContain("db merge", "reconciliation hint must be omitted in compare mode");
+        report.Should().NotContain("Repository");
+        report.Should().NotContain("Live Database");
     }
 
     // ── Clean tables section ──────────────────────────────────────────────────
