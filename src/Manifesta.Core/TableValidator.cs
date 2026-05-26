@@ -61,7 +61,7 @@ public sealed class TableValidator : IValidator<TableDefinition>
         // Rule 2: Primary key integrity
         foreach (var pkField in table.PrimaryKey)
         {
-            var field = table.Fields.FirstOrDefault(f => f.Name == pkField);
+            var field = table.Fields.FirstOrDefault(f => string.Equals(f.Name, pkField, StringComparison.OrdinalIgnoreCase));
             if (field is null)
                 issues.Add(Error("PK-FIELD-MISSING", $"Primary key field '{pkField}' does not exist"));
             else if (field.Nullable)
@@ -71,7 +71,7 @@ public sealed class TableValidator : IValidator<TableDefinition>
         // Rule 3: Foreign key integrity
         foreach (var fk in table.ForeignKeys)
         {
-            if (!table.Fields.Any(f => f.Name == fk.SourceField))
+            if (!table.Fields.Any(f => string.Equals(f.Name, fk.SourceField, StringComparison.OrdinalIgnoreCase)))
                 issues.Add(Error("FK-SOURCE-MISSING", $"Foreign key source field '{fk.SourceField}' does not exist"));
 
             // Rule 9: CascadeDelete is only meaningful for Physical FK relationships

@@ -65,6 +65,28 @@ public sealed class ErdGenerator
         sb.AppendLine("erDiagram");
         sb.AppendLine("direction LR");
 
+        // ── Pre-compute incoming target fields ───────────────────────────────
+        // For each table in the diagram scope, collect the TargetField values of every
+        // FK that points to it and will be rendered. These fields must appear in the
+        // parent entity block even when they are not PKs or source-FK columns.
+        var incomingTargetFields = new Dictionary<string, HashSet<string>>(TableNames.Comparer);
+
+        foreach (var tableName in tablesToInclude)
+        {
+            if (!tablesByName.TryGetValue(tableName, out var tbl)) continue;
+            foreach (var fk in tbl.ForeignKeys)
+            {
+                var includeLogical = erd.IncludeLogical ?? true;
+                if (fk.Kind == ForeignKeyKind.Logical && !includeLogical) continue;
+                if (fk.Kind == ForeignKeyKind.Virtual && !erd.IncludeVirtual) continue;
+                if (!erdTableSet.Contains(fk.TargetTable)) continue;
+
+                if (!incomingTargetFields.TryGetValue(fk.TargetTable, out var set))
+                    incomingTargetFields[fk.TargetTable] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                set.Add(fk.TargetField);
+            }
+        }
+
         // ── Relationships ────────────────────────────────────────────────────
         // Track which tables appear in at least one rendered relationship so
         // we know which isolated tables need an explicit entity declaration.
@@ -84,12 +106,13 @@ public sealed class ErdGenerator
                 if (fk.Kind == ForeignKeyKind.Virtual && !erd.IncludeVirtual) continue;
 
                 var child = MermaidName(tableName);
+                var label = RelationshipLabel(fk.SourceField, fk.TargetField);
 
                 if (erdTableSet.Contains(fk.TargetTable))
                 {
                     // Intra-section: standard rendering.
                     var parent = MermaidName(fk.TargetTable);
-                    sb.AppendLine($"    {parent} ||--o{{ {child} : \"{fk.SourceField}\"");
+                    sb.AppendLine($"    {parent} ||--o{{ {child} : \"{label}\"");
                     tablesInRelationships.Add(tableName);
                     tablesInRelationships.Add(fk.TargetTable);
                 }
@@ -103,7 +126,7 @@ public sealed class ErdGenerator
                     // virtual implies a cross-database link (out of scope for ERDs).
                     var sectionLabel = tableSectionMap.TryGetValue(fk.TargetTable, out var s) ? s : "?";
                     var stubName     = ExternalStubName(sectionLabel, fk.TargetTable);
-                    sb.AppendLine($"    {stubName} ||--o{{ {child} : \"{fk.SourceField}\"");
+                    sb.AppendLine($"    {stubName} ||--o{{ {child} : \"{label}\"");
                     tablesInRelationships.Add(tableName);
                     crossSectionStubs.Add(stubName);
                 }
@@ -141,11 +164,15 @@ public sealed class ErdGenerator
             var fkSet = new HashSet<string>(
                 table.ForeignKeys.Select(f => f.SourceField),
                 StringComparer.OrdinalIgnoreCase);
+            var refSet = incomingTargetFields.TryGetValue(tableName, out var incoming)
+                ? incoming
+                : (IReadOnlyCollection<string>)[];
 
             var fieldsToRender = table.Fields
                 .Where(f => fieldsMode == ErdFields.All
                             || pkSet.Contains(f.Name)
-                            || fkSet.Contains(f.Name))
+                            || fkSet.Contains(f.Name)
+                            || refSet.Contains(f.Name))
                 .ToList();
 
             if (table.IsDeprecated)
@@ -204,4 +231,15 @@ public sealed class ErdGenerator
     /// </summary>
     public static string MermaidType(string sqlType) =>
         sqlType.Split('(')[0].ToLowerInvariant();
+
+    /// <summary>
+    /// Returns the relationship label for a FK.
+    /// When source and target field names are the same (case-insensitive) only the
+    /// source name is emitted; when they differ both sides are shown as
+    /// <c>sourceField -&gt; targetField</c> so the column mapping is unambiguous.
+    /// </summary>
+    public static string RelationshipLabel(string sourceField, string targetField) =>
+        string.Equals(sourceField, targetField, StringComparison.OrdinalIgnoreCase)
+            ? sourceField
+            : $"{sourceField} -> {targetField}";
 }

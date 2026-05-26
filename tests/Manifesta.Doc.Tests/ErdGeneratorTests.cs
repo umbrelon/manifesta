@@ -50,6 +50,7 @@ public sealed class ErdGeneratorTests
         var erd    = new ErdDefinition { Tables = ["dbo.Reseller", "dbo.ResellerId"] };
         var result = _gen.Generate(erd, ["dbo.Reseller", "dbo.ResellerId"], ToDict(parent, child));
 
+        // SourceField "lResellerId" and TargetField "lResellerID" differ only by case → same label
         result.Should().Contain("\"dbo.Reseller\" ||--o{ \"dbo.ResellerId\" : \"lResellerId\"");
     }
 
@@ -278,7 +279,8 @@ public sealed class ErdGeneratorTests
         var erd    = new ErdDefinition { Tables = ["dbo.Reseller", "dbo.WholesaleMapping"] };
         var result = _gen.Generate(erd, ["dbo.Reseller", "dbo.WholesaleMapping"], ToDict(parent, child));
 
-        result.Should().Contain("\"dbo.Reseller\" ||--o{ \"dbo.WholesaleMapping\" : \"resellerId\"");
+        // "resellerId" maps to "lResellerID" — different names, label shows both sides
+        result.Should().Contain("\"dbo.Reseller\" ||--o{ \"dbo.WholesaleMapping\" : \"resellerId -> lResellerID\"");
     }
 
     [Fact]
@@ -304,7 +306,7 @@ public sealed class ErdGeneratorTests
         var erd    = new ErdDefinition { Tables = ["dbo.Reseller", "dbo.WholesaleMapping"], IncludeVirtual = true };
         var result = _gen.Generate(erd, ["dbo.Reseller", "dbo.WholesaleMapping"], ToDict(parent, child));
 
-        result.Should().Contain("\"dbo.Reseller\" ||--o{ \"dbo.WholesaleMapping\" : \"resellerId\"");
+        result.Should().Contain("\"dbo.Reseller\" ||--o{ \"dbo.WholesaleMapping\" : \"resellerId -> lResellerID\"");
     }
 
     [Fact]
@@ -318,7 +320,7 @@ public sealed class ErdGeneratorTests
         var erd    = new ErdDefinition { Tables = ["dbo.Reseller", "dbo.WholesaleMapping"], IncludeLogical = false };
         var result = _gen.Generate(erd, ["dbo.Reseller", "dbo.WholesaleMapping"], ToDict(parent, child));
 
-        result.Should().Contain("\"dbo.Reseller\" ||--o{ \"dbo.WholesaleMapping\" : \"resellerId\"");
+        result.Should().Contain("\"dbo.Reseller\" ||--o{ \"dbo.WholesaleMapping\" : \"resellerId -> lResellerID\"");
     }
 
     // ── Scope: table outside section silently skipped ────────────────────────
@@ -335,6 +337,127 @@ public sealed class ErdGeneratorTests
 
         result.Should().Contain("\"dbo.Reseller\"");
         result.Should().NotContain("\"dbo.Other\"");
+    }
+
+    // ── Relationship label: source → target field ────────────────────────────
+
+    [Fact]
+    public void Generate_FkSameFieldName_LabelShowsFieldOnce()
+    {
+        var parent = MakeTable("dbo.Reseller",
+            fields: [new() { Name = "Id", Type = "int", Nullable = false }],
+            pk: ["Id"]);
+        var child = MakeTable("dbo.Order",
+            fks: [new() { SourceField = "ResellerId", TargetTable = "dbo.Reseller", TargetField = "ResellerId" }]);
+
+        var erd    = new ErdDefinition { Tables = ["dbo.Reseller", "dbo.Order"] };
+        var result = _gen.Generate(erd, ["dbo.Reseller", "dbo.Order"], ToDict(parent, child));
+
+        result.Should().Contain(": \"ResellerId\"");
+        result.Should().NotContain("->");
+    }
+
+    [Fact]
+    public void Generate_FkSameFieldNameDifferentCase_LabelShowsFieldOnce()
+    {
+        var parent = MakeTable("dbo.Reseller",
+            fields: [new() { Name = "lResellerID", Type = "int", Nullable = false }],
+            pk: ["lResellerID"]);
+        var child = MakeTable("dbo.Order",
+            fks: [new() { SourceField = "lResellerId", TargetTable = "dbo.Reseller", TargetField = "lResellerID" }]);
+
+        var erd    = new ErdDefinition { Tables = ["dbo.Reseller", "dbo.Order"] };
+        var result = _gen.Generate(erd, ["dbo.Reseller", "dbo.Order"], ToDict(parent, child));
+
+        // Case-insensitively equal → single-name label, no arrow
+        result.Should().Contain(": \"lResellerId\"");
+        result.Should().NotContain("->");
+    }
+
+    [Fact]
+    public void Generate_FkDifferentFieldNames_LabelShowsBothSides()
+    {
+        var parent = MakeTable("dbo.Reseller",
+            fields: [new() { Name = "lResellerID", Type = "int", Nullable = false }],
+            pk: ["lResellerID"]);
+        var child = MakeTable("dbo.Order",
+            fks: [new() { SourceField = "resellerId", TargetTable = "dbo.Reseller", TargetField = "lResellerID" }]);
+
+        var erd    = new ErdDefinition { Tables = ["dbo.Reseller", "dbo.Order"] };
+        var result = _gen.Generate(erd, ["dbo.Reseller", "dbo.Order"], ToDict(parent, child));
+
+        result.Should().Contain(": \"resellerId -> lResellerID\"");
+    }
+
+    // ── Target field in parent entity block ──────────────────────────────────
+
+    [Fact]
+    public void Generate_LogicalFkTargetFieldNotPkOrFk_IncludedInParentEntity()
+    {
+        // dbo.Reseller has "szCode" which is not a PK or FK source, but a logical FK
+        // on dbo.Order references it as TargetField. It must appear in dbo.Reseller's entity block.
+        var parent = MakeTable("dbo.Reseller",
+            fields: [
+                new() { Name = "lResellerID", Type = "int",         Nullable = false },
+                new() { Name = "szCode",      Type = "varchar(50)", Nullable = false },
+            ],
+            pk: ["lResellerID"]);
+        var child = MakeTable("dbo.Order",
+            fks: [new() { SourceField = "resellerCode", TargetTable = "dbo.Reseller", TargetField = "szCode", Kind = ForeignKeyKind.Logical }]);
+
+        var erd    = new ErdDefinition { Tables = ["dbo.Reseller", "dbo.Order"] };
+        var result = _gen.Generate(erd, ["dbo.Reseller", "dbo.Order"], ToDict(parent, child));
+
+        // Field appears in the entity block (no annotation — REF is not a valid Mermaid key)
+        result.Should().Contain("varchar szCode");
+    }
+
+    [Fact]
+    public void Generate_TargetFieldAlreadyPk_NoPkAnnotationNotOverridden()
+    {
+        var parent = MakeTable("dbo.Reseller",
+            fields: [new() { Name = "lResellerID", Type = "int", Nullable = false }],
+            pk: ["lResellerID"]);
+        var child = MakeTable("dbo.Order",
+            fks: [new() { SourceField = "resellerId", TargetTable = "dbo.Reseller", TargetField = "lResellerID" }]);
+
+        var erd    = new ErdDefinition { Tables = ["dbo.Reseller", "dbo.Order"] };
+        var result = _gen.Generate(erd, ["dbo.Reseller", "dbo.Order"], ToDict(parent, child));
+
+        // PK annotation takes precedence; field must not lose its PK marker
+        result.Should().Contain("lResellerID PK");
+    }
+
+    [Fact]
+    public void Generate_TargetFieldExcludedWhenFkKindFiltered()
+    {
+        // Logical FK is excluded (IncludeLogical = false) → target field must NOT appear via REF
+        var parent = MakeTable("dbo.Reseller",
+            fields: [
+                new() { Name = "lResellerID", Type = "int",         Nullable = false },
+                new() { Name = "szCode",      Type = "varchar(50)", Nullable = false },
+            ],
+            pk: ["lResellerID"]);
+        var child = MakeTable("dbo.Order",
+            fks: [new() { SourceField = "resellerCode", TargetTable = "dbo.Reseller", TargetField = "szCode", Kind = ForeignKeyKind.Logical }]);
+
+        var erd    = new ErdDefinition { Tables = ["dbo.Reseller", "dbo.Order"], IncludeLogical = false };
+        var result = _gen.Generate(erd, ["dbo.Reseller", "dbo.Order"], ToDict(parent, child));
+
+        result.Should().NotContain("szCode");
+    }
+
+    // ── RelationshipLabel helper ──────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("Id",          "Id",          "Id")]
+    [InlineData("resellerId",  "resellerId",  "resellerId")]
+    [InlineData("lResellerId", "lResellerID", "lResellerId")]   // case-insensitive equal
+    [InlineData("resellerId",  "lResellerID", "resellerId -> lResellerID")]
+    [InlineData("operatorId",  "Id",          "operatorId -> Id")]
+    public void RelationshipLabel_ReturnsExpected(string source, string target, string expected)
+    {
+        ErdGenerator.RelationshipLabel(source, target).Should().Be(expected);
     }
 
     // ── MermaidName helper ────────────────────────────────────────────────────
@@ -429,7 +552,8 @@ public sealed class ErdGeneratorTests
         var map    = SectionMap(("dbo.Operator", "Core"), ("platform.OperatorPrefix", "Platform"));
         var result = _gen.Generate(erd, ["platform.OperatorPrefix"], ToDict(opPrefix, opTable), tableSectionMap: map);
 
-        result.Should().Contain("\"[Core] dbo.Operator\" ||--o{ \"platform.OperatorPrefix\" : \"operatorId\"");
+        // "operatorId" maps to "Id" — different names, label shows both sides
+        result.Should().Contain("\"[Core] dbo.Operator\" ||--o{ \"platform.OperatorPrefix\" : \"operatorId -> Id\"");
     }
 
     [Fact]
@@ -538,9 +662,9 @@ public sealed class ErdGeneratorTests
         var result = _gen.Generate(new ErdDefinition { Tables = ["platform.OperatorPrefix"] },
             ["platform.OperatorPrefix"], ToDict(child, parent), tableSectionMap: map);
 
-        // Both FK relationship lines must appear.
-        result.Should().Contain("\"[Core] dbo.Operator\" ||--o{ \"platform.OperatorPrefix\" : \"operatorId\"");
-        result.Should().Contain("\"[Core] dbo.Operator\" ||--o{ \"platform.OperatorPrefix\" : \"operatorCode\"");
+        // Both FK relationship lines must appear with column-mapping labels.
+        result.Should().Contain("\"[Core] dbo.Operator\" ||--o{ \"platform.OperatorPrefix\" : \"operatorId -> Id\"");
+        result.Should().Contain("\"[Core] dbo.Operator\" ||--o{ \"platform.OperatorPrefix\" : \"operatorCode -> Code\"");
     }
 
     [Fact]
@@ -555,7 +679,7 @@ public sealed class ErdGeneratorTests
         var result = _gen.Generate(new ErdDefinition { Tables = ["platform.OperatorPrefix"] },
             ["platform.OperatorPrefix"], ToDict(child, parent), tableSectionMap: new Dictionary<string, string>());
 
-        result.Should().Contain("\"[?] dbo.Operator\" ||--o{ \"platform.OperatorPrefix\" : \"operatorId\"");
+        result.Should().Contain("\"[?] dbo.Operator\" ||--o{ \"platform.OperatorPrefix\" : \"operatorId -> Id\"");
     }
 
     // ── ExternalStubName helper ───────────────────────────────────────────────
