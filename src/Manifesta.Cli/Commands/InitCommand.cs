@@ -5,6 +5,7 @@ using Manifesta.Core;
 using Manifesta.Core.Filtering;
 using Manifesta.Core.IR;
 using Manifesta.Core.Pipeline;
+using Microsoft.Extensions.FileSystemGlobbing;
 
 namespace Manifesta.Cli.Commands;
 
@@ -42,11 +43,12 @@ file static class InitProviderHelper
 /// <summary>manifesta init — one-shot bootstrap from a database or external schema format.</summary>
 public sealed class InitCommand : Command
 {
-    public InitCommand() : base("init", "Bootstrap Manifesta from a live database, DBML, or Prisma schema")
+    public InitCommand() : base("init", "Bootstrap Manifesta from a live database, DBML, Prisma schema, or SQL DDL file")
     {
         AddCommand(new InitDbCommand());
         AddCommand(new InitDbmlCommand());
         AddCommand(new InitPrismaCommand());
+        AddCommand(new InitSqlCommand());
     }
 }
 
@@ -493,6 +495,238 @@ public sealed class InitPrismaCommand : ManifestCommandBase
             globals);
 
         return parseResult.Errors.Count > 0 || failed > 0
+            ? (int)ExitCode.ValidationErrors
+            : (int)ExitCode.Success;
+    }
+}
+
+// ─── init sql provider helper ─────────────────────────────────────────────────
+// SQL Server is allowed here because init sql is pure file parsing — no live
+// connection is required. The enterprise gate applies to live introspection only.
+
+file static class SqlDdlProviderHelper
+{
+    internal static readonly Option<string> ProviderOption =
+        new(["--provider"], () => "mysql",
+            "Database dialect of the DDL file: mysql, postgres, sqlite, sqlserver (default: mysql)");
+
+    internal static DbProvider Parse(string? value) =>
+        (value ?? "mysql").ToLowerInvariant() switch
+        {
+            "mysql"                    => DbProvider.MySql,
+            "postgres" or "postgresql" => DbProvider.Postgres,
+            "sqlite"                   => DbProvider.Sqlite,
+            "sqlserver" or "mssql"     => DbProvider.SqlServer,
+            var s => throw new ManifestaConfigException(
+                $"Unknown provider '{s}'. Valid values: mysql, postgres, sqlite, sqlserver.")
+        };
+}
+
+// ─── init sql ─────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// manifesta init sql — parse SQL DDL CREATE TABLE statements and write one
+/// table-definition JSON per table.  Supports MySQL, PostgreSQL, SQLite, and
+/// SQL Server dialects.  Works with both clean migration scripts and database
+/// dump files (mysqldump --no-data, pg_dump --schema-only).
+/// </summary>
+public sealed class InitSqlCommand : ManifestCommandBase
+{
+    private readonly Option<string>  _input     = new(["--input"],
+        "Path to a .sql file or directory of .sql files (required)");
+    private readonly Option<string?> _outputDir = new(["--output-dir"],
+        () => "./tables",
+        "Directory to write JSON table definition files (default: ./tables)");
+    private readonly Option<string?> _schema    = new(["--schema"],
+        () => null,
+        "Prefix unqualified table names with <schema> (e.g. --schema dbo → dbo.Customer)");
+    private readonly Option<bool>    _overwrite = new(["--overwrite"],
+        () => false,
+        "Overwrite existing JSON files (without this flag, existing files are skipped)");
+    private readonly Option<string>  _provider  = SqlDdlProviderHelper.ProviderOption;
+    private readonly Option<bool>    _recursive = new(["--recursive", "-r"],
+        () => false,
+        "Expand a plain filename --pattern to all subdirectories (prepends **/). " +
+        "Ignored when --pattern already contains a path separator or **, and when --input is a file");
+    private readonly Option<string>  _pattern   = new(["--pattern"],
+        () => "*.sql",
+        "Glob pattern for file matching when --input is a directory (default: *.sql). " +
+        "Plain filename patterns (e.g. *_up.sql) are controlled by --recursive. " +
+        "Path globs (e.g. 2024/**/*.sql, **/create_*.sql) are matched directly and ignore --recursive");
+
+    public InitSqlCommand() : base("sql",
+        "Parse SQL DDL files and write one table-definition JSON per table")
+    {
+        _input.IsRequired = true;
+        AddOption(_input);
+        AddOption(_outputDir);
+        AddOption(_schema);
+        AddOption(_overwrite);
+        AddOption(_provider);
+        AddOption(_recursive);
+        AddOption(_pattern);
+
+        this.SetHandler(context => InvokeBaseAsync(context));
+    }
+
+    protected override async Task<int> ExecuteAsync(
+        GlobalOptions globals, InvocationContext context, CancellationToken ct)
+    {
+        var pr        = context.ParseResult;
+        var inputPath = pr.GetValueForOption(_input)!;
+        var outputDir = pr.GetValueForOption(_outputDir) ?? "./tables";
+        var schema    = pr.GetValueForOption(_schema);
+        var overwrite = pr.GetValueForOption(_overwrite);
+        var provider  = SqlDdlProviderHelper.Parse(pr.GetValueForOption(_provider));
+        var recursive = pr.GetValueForOption(_recursive);
+        var pattern   = pr.GetValueForOption(_pattern) ?? "*.sql";
+
+        // ── Collect .sql files ────────────────────────────────────────────────
+        List<string> sqlFiles;
+
+        if (Directory.Exists(inputPath))
+        {
+            // Determine whether the pattern already encodes path structure.
+            // A pattern is a "path glob" if it contains / \ or **.
+            // Plain filename patterns (e.g. *.sql, *_up.sql) are purely name-based.
+            bool isPathGlob = pattern.Contains('/') ||
+                              pattern.Contains('\\') ||
+                              pattern.Contains("**");
+
+            if (isPathGlob && recursive)
+                OutputFormatter.WriteVerbose(
+                    "--recursive is ignored because --pattern already contains a path glob.", globals);
+
+            // Resolve effective glob pattern:
+            //   path glob  → use as-is (normalise backslashes to forward-slashes)
+            //   filename   → --recursive prepends **/ ; without it matches root only
+            var effectivePattern = isPathGlob
+                ? pattern.Replace('\\', '/')
+                : (recursive ? $"**/{pattern}" : pattern);
+
+            var matcher = new Matcher(StringComparison.OrdinalIgnoreCase);
+            matcher.AddInclude(effectivePattern);
+
+            sqlFiles = matcher
+                .GetResultsInFullPath(inputPath)
+                .OrderBy(f => f)
+                .ToList();
+
+            if (sqlFiles.Count == 0)
+            {
+                var hint = !recursive && !isPathGlob
+                    ? " (use --recursive to also search subdirectories)"
+                    : string.Empty;
+                OutputFormatter.WriteError(
+                    $"No files matching '{effectivePattern}' found in: {inputPath}{hint}");
+                return (int)ExitCode.FatalSchemaErrors;
+            }
+
+            OutputFormatter.WriteVerbose(
+                $"Found {sqlFiles.Count} file(s) matching '{effectivePattern}'", globals);
+        }
+        else if (File.Exists(inputPath))
+        {
+            sqlFiles = [inputPath];
+        }
+        else
+        {
+            OutputFormatter.WriteError($"Input not found: {inputPath}");
+            return (int)ExitCode.FatalSchemaErrors;
+        }
+
+        // ── Parse all files ───────────────────────────────────────────────────
+        var parser   = new SqlDdlParser();
+        var allTables = new List<TableDefinition>();
+        var allErrors = new List<string>();
+
+        foreach (var file in sqlFiles)
+        {
+            OutputFormatter.WriteVerbose($"Parsing: {file}", globals);
+            string sql;
+            try
+            {
+                sql = await File.ReadAllTextAsync(file, ct);
+            }
+            catch (Exception ex)
+            {
+                OutputFormatter.WriteError($"Could not read {file}: {ex.Message}");
+                return (int)ExitCode.FatalSchemaErrors;
+            }
+
+            var result = parser.Parse(sql, provider, schema);
+
+            foreach (var err in result.Errors)
+                OutputFormatter.WriteError($"[{Path.GetFileName(file)}] {err}");
+
+            allErrors.AddRange(result.Errors);
+            allTables.AddRange(result.Tables);
+        }
+
+        if (allTables.Count == 0)
+        {
+            if (allErrors.Count > 0)
+            {
+                OutputFormatter.WriteError("No tables could be parsed from the input.");
+                return (int)ExitCode.FatalSchemaErrors;
+            }
+
+            OutputFormatter.WriteLine("No CREATE TABLE statements found in the input.", globals);
+            return (int)ExitCode.Success;
+        }
+
+        // ── Detect duplicate table names across files ─────────────────────────
+        var duplicates = allTables
+            .GroupBy(t => t.Name, TableNames.Comparer)
+            .Where(g => g.Count() > 1)
+            .ToList();
+
+        foreach (var dup in duplicates)
+            OutputFormatter.WriteError(
+                $"Duplicate table name '{dup.Key}' found across input files.");
+
+        if (duplicates.Count > 0)
+            return (int)ExitCode.FatalSchemaErrors;
+
+        // ── Write JSON files ──────────────────────────────────────────────────
+        IWriter writer = globals.DryRun ? new DryRunWriter() : new AtomicWriter();
+        if (!globals.DryRun) Directory.CreateDirectory(outputDir);
+
+        int written = 0, skipped = 0, failed = 0;
+
+        foreach (var table in allTables)
+        {
+            var outputFile = Path.Combine(outputDir, $"{table.Name}.json");
+
+            if (!overwrite && File.Exists(outputFile))
+            {
+                OutputFormatter.WriteVerbose($"  Skipped (already exists): {outputFile}", globals);
+                skipped++;
+                continue;
+            }
+
+            try
+            {
+                var json = TableDefinitionSerializer.Serialize(table);
+                await writer.WriteAsync(outputFile, json, ct);
+                OutputFormatter.WriteVerbose($"  Written: {outputFile}", globals);
+                written++;
+            }
+            catch (Exception ex)
+            {
+                OutputFormatter.WriteError($"Failed to write {outputFile}: {ex.Message}");
+                failed++;
+            }
+        }
+
+        OutputFormatter.WriteLine(
+            $"Imported {written} table(s) from SQL DDL" +
+            (skipped > 0 ? $", {skipped} skipped (already exist)" : "") +
+            (failed  > 0 ? $", {failed} failed" : "") +
+            $" into {outputDir}",
+            globals);
+
+        return allErrors.Count > 0 || failed > 0
             ? (int)ExitCode.ValidationErrors
             : (int)ExitCode.Success;
     }

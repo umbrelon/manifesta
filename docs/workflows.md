@@ -8,6 +8,7 @@
 
 - [First-time setup from a DBML file](#first-time-setup-from-a-dbml-file)
 - [First-time setup from a Prisma schema](#first-time-setup-from-a-prisma-schema)
+- [Bootstrap from a SQL DDL file](#bootstrap-from-a-sql-ddl-file)
 - [Regenerate docs after schema changes](#regenerate-docs-after-schema-changes)
 - [Add manual descriptions after import](#add-manual-descriptions-after-import)
 - [Run full validation in CI](#run-full-validation-in-ci)
@@ -43,6 +44,54 @@ git commit -m "chore: initial Manifesta schema registry"
 ```
 
 The registry files in `tables/` and `document-sections/` are now your source of truth. Edit them directly to add descriptions, adjust FK kinds, or configure ERD diagrams. `database.dbml` can be regenerated at any time with `manifesta doc db --format dbml`.
+
+---
+
+## Bootstrap from a SQL DDL file
+
+Starting from a `CREATE TABLE` DDL file (migration script, `mysqldump --no-data` output, `pg_dump --schema-only`, or a T-SQL file):
+
+```bash
+# MySQL dump file
+manifesta init sql --input dump.sql --provider mysql --schema mydb
+
+# PostgreSQL pg_dump
+manifesta init sql --input schema.sql --provider postgres --schema public
+
+# SQL Server T-SQL (only init command where sqlserver is available in OSS)
+manifesta init sql --input tables.sql --provider sqlserver --schema dbo
+
+# Parse a whole directory of migration files (top-level only)
+manifesta init sql --input ./migrations --provider mysql
+
+# Recurse into subdirectories (e.g. migrations/2024/, migrations/2025/)
+manifesta init sql --input ./migrations --provider mysql --recursive
+
+# Only process "up" migrations, skip rollbacks (plain filename + --recursive)
+manifesta init sql --input ./migrations --provider mysql --recursive --pattern "*_up.sql"
+
+# Same result using a path glob directly
+manifesta init sql --input ./migrations --provider mysql --pattern "**/*_up.sql"
+
+# Only process a specific year directory
+manifesta init sql --input ./migrations --provider mysql --pattern "2024/*.sql"
+
+# Preview first — no files written
+manifesta init sql --input dump.sql --provider mysql --dry-run
+
+# Overwrite if you are re-importing after a dump refresh
+manifesta init sql --input dump.sql --provider mysql --overwrite
+```
+
+After importing, generate docs and validate:
+
+```bash
+manifesta doc db --output-dir ./publish
+manifesta validate all
+manifesta validate cross
+```
+
+**Tip:** Any parse errors are reported as structured output (one line per error), but they do not stop the successful tables from being written. Tables that fail to parse are skipped with exit code `1`; successful tables are always written.
 
 ---
 

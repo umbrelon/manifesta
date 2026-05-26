@@ -13,6 +13,7 @@
 - [Commands — Init](./commands-init.md)
   - [Init DBML](./commands-init.md#init-dbml)
   - [Init Prisma](./commands-init.md#init-prisma)
+  - [Init SQL](./commands-init.md#init-sql)
 - [Commands — Documentation](./commands-doc.md)
   - [Doc DB](./commands-doc.md#doc-db)
 - [Commands — Database](./commands-db.md)
@@ -88,9 +89,10 @@ Produces `./reports/validation.json` — a structured JSON report listing every 
 ## Usage
 
 ```
-manifesta init dbml --input <file> [--output-dir <dir>] [--schema <prefix>] [--overwrite]
+manifesta init dbml   --input <file> [--output-dir <dir>] [--schema <prefix>] [--overwrite]
 manifesta init prisma --input <file> [--output-dir <dir>] [--provider mysql|postgres]
-manifesta init db --provider mysql|postgres --connection <cs> [--schema <schemas>]
+manifesta init sql    --input <file|dir> [--provider mysql|postgres|sqlite|sqlserver] [--schema <prefix>] [--output-dir <dir>]
+manifesta init db     --provider mysql|postgres --connection <cs> [--schema <schemas>]
 manifesta doc db [--format markdown|dbml] [--output <file>] [--output-dir <dir>]
 manifesta db export --connection <cs> [--provider mysql|postgres|sqlite] [--output-dir <dir>] [--include-views] [--overwrite]
 manifesta db drift  --connection <cs>|--input-dir <dir> [--provider mysql|postgres|sqlite] [--strict]

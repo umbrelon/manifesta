@@ -19,6 +19,7 @@ Manifesta OSS lets you bootstrap a schema registry from an existing DBML or Pris
 |---------|------------------|
 | `manifesta init dbml` | Bootstrap a schema registry from a `.dbml` file |
 | `manifesta init prisma` | Bootstrap a schema registry from a `.prisma` schema |
+| `manifesta init sql --provider mysql` | Parse a SQL DDL file (MySQL, PostgreSQL, SQLite, or SQL Server) |
 | `manifesta init db --provider mysql` | Introspect a live MySQL database |
 | `manifesta init db --provider postgres` | Introspect a live PostgreSQL database |
 | `manifesta doc db` | Generate `database.md` with ERD diagrams and field tables |
@@ -131,6 +132,10 @@ manifesta init dbml --input database.dbml
 
 # Import from Prisma
 manifesta init prisma --input ./prisma/schema.prisma
+
+# Import from a SQL DDL file (all four dialects, no live connection required)
+manifesta init sql --input schema.sql --provider mysql
+manifesta init sql --input tables.sql --provider sqlserver  # SQL Server supported here
 
 # Generate documentation
 manifesta doc db --output-dir ./docs
