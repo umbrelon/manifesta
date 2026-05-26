@@ -10,6 +10,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `db export` — introspect a live MySQL, PostgreSQL, or SQLite database and write one `table.json` file per table (and optionally per view) into an output directory; output is in the exact format consumed by `db drift --input-dir` and `db merge --input-dir`, completing the air-gapped workflow without requiring `init db`
+- SQLite support in `db drift` and `db merge` (`--provider sqlite`); previously only `init db` accepted the `sqlite` provider
 - `init dbml` — bootstrap a schema registry from a DBML file; extracts tables, columns, PKs, FKs, and `TableGroup` sections
 - `init prisma` — bootstrap a schema registry from a Prisma schema; infers SQL types, native type overrides, PKs, FKs, and relation mode from the `datasource` block
 - `doc db` — generate `database.md` with hierarchical TOC, field tables, and embedded Mermaid ERD diagrams

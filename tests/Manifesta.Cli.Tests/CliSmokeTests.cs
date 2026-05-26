@@ -252,6 +252,35 @@ public sealed class CliSmokeTests
         finally { Directory.Delete(tmp, recursive: true); }
     }
 
+    // ── db export ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task DbExportHelp_ExitsZeroAndListsProviders()
+    {
+        if (BinPath is null) return;
+        var (code, stdout, _) = await RunAsync("db", "export", "--help");
+        code.Should().Be(0);
+        stdout.Should().Contain("mysql");
+        stdout.Should().Contain("postgres");
+        stdout.Should().Contain("sqlite");
+        stdout.Should().NotContain("sqlserver");
+    }
+
+    [Fact]
+    public async Task DbExport_NoConnection_ExitsWithConfigError()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var (code, _, stderr) = await RunAsync(tmp, "db", "export");
+            code.Should().Be(4);
+            stderr.Should().Contain("--connection");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
     // ── db merge ─────────────────────────────────────────────────────────────
 
     [Fact]

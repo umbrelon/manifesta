@@ -13,6 +13,7 @@
 - [Run full validation in CI](#run-full-validation-in-ci)
 - [Detect schema drift in CI](#detect-schema-drift-in-ci)
 - [Keep the registry in sync](#keep-the-registry-in-sync)
+- [Export a schema snapshot](#export-a-schema-snapshot)
 - [Migrate from dbdocs.io](#migrate-from-dbdocsio)
 
 ---
@@ -210,9 +211,15 @@ jobs:
 
 ```bash
 # Step 1 (local or in a privileged pipeline): export a live snapshot
-manifesta db drift --provider postgres --connection "..." --input-dir ./snapshots
+manifesta db export \
+  --provider postgres \
+  --connection "$DB_CONNECTION" \
+  --output-dir ./snapshots \
+  --overwrite
 
-# Step 2 (CI): compare registry against the committed snapshot — no credentials needed
+# Commit ./snapshots to the repo (or pass it as a pipeline artifact)
+
+# Step 2 (CI): compare registry against the snapshot — no credentials needed
 manifesta db drift --input-dir ./snapshots --output-dir ./reports
 ```
 
@@ -288,11 +295,48 @@ In environments where CI cannot reach the database directly, export a snapshot f
 
 ```bash
 # On a machine with DB access: export a snapshot
-manifesta db drift --provider mysql --connection "..." --input-dir ./snapshots
-# (or use init db to produce the raw JSON files)
+manifesta db export --provider mysql --connection "..." --output-dir ./snapshots --overwrite
 
-# Anywhere else: merge from the snapshot
+# Anywhere else (no live connection needed): merge from the snapshot
 manifesta db merge --input-dir ./snapshots
+```
+
+---
+
+## Export a schema snapshot
+
+Use `db export` any time you need a point-in-time JSON snapshot of a live database — for archiving, comparison, or feeding into the air-gapped `--input-dir` workflow.
+
+```bash
+# Export the full schema to ./snapshots/prod/
+manifesta db export \
+  --provider postgres \
+  --connection "$DB_CONNECTION" \
+  --output-dir ./snapshots/prod \
+  --overwrite
+
+# Export a specific schema only
+manifesta db export \
+  --provider postgres \
+  --connection "$DB_CONNECTION" \
+  --schema public \
+  --output-dir ./snapshots/public \
+  --overwrite
+
+# Also capture views
+manifesta db export \
+  --provider mysql \
+  --connection "$DB_CONNECTION" \
+  --include-views \
+  --output-dir ./snapshots
+```
+
+The exported files are plain `table.json` objects — identical to what the registry uses — and can be passed directly to `db drift --input-dir` or `db merge --input-dir`:
+
+```bash
+manifesta db export  --connection "$DB_CONNECTION" --output-dir ./snapshots --overwrite
+manifesta db drift   --input-dir ./snapshots --strict
+manifesta db merge   --input-dir ./snapshots --no-report
 ```
 
 ---

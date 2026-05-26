@@ -6,8 +6,75 @@
 
 ## Table of Contents
 
+- [db export](#db-export)
 - [db drift](#db-drift)
 - [db merge](#db-merge)
+
+---
+
+## db export
+
+Introspects a live database and writes one `table.json` file per table into an output directory. The output is in the exact format consumed by `db drift --input-dir` and `db merge --input-dir`, making this the first step in every air-gapped workflow.
+
+```bash
+# Export schema from a live MySQL database
+manifesta db export --provider mysql --connection "Server=localhost;Database=mydb;Uid=root;Pwd=secret;"
+
+# Export from PostgreSQL, restricting to specific schemas
+manifesta db export --provider postgres --connection "Host=localhost;Database=mydb;Username=postgres;Password=secret;" --schema public,app
+
+# Export from a local SQLite file
+manifesta db export --provider sqlite --connection "Data Source=./mydb.sqlite3;"
+
+# Write to a specific directory
+manifesta db export --connection "..." --output-dir ./snapshots/prod
+
+# Also export views
+manifesta db export --connection "..." --include-views
+
+# Overwrite existing snapshot files (default skips files that already exist)
+manifesta db export --connection "..." --overwrite
+```
+
+**Flags:**
+
+| Flag | Required | Default | Description |
+|------|----------|---------|-------------|
+| `--connection` | Yes | — | ADO.NET connection string for the live database |
+| `--output-dir` | No | `./export` | Directory for the exported JSON files |
+| `--provider` | No | `mysql` | Database provider: `mysql`, `postgres`, or `sqlite`. SQL Server requires the full edition. |
+| `--schema` | No | — | Comma-separated schemas to export (e.g. `public,app`). Ignored for MySQL and SQLite. |
+| `--include-views` | No | false | Also export database views alongside tables |
+| `--overwrite` | No | false | Overwrite existing JSON files. Without this flag, files that already exist are skipped. |
+
+---
+
+### Typical usage
+
+`db export` is the start of the air-gapped workflow. Run it once on a machine with database access to produce a snapshot, then ship the snapshot files to CI or to another machine where no live connection is available:
+
+```bash
+# Step 1 — on a machine with DB access
+manifesta db export \
+  --provider postgres \
+  --connection "$DB_CONNECTION" \
+  --output-dir ./snapshots/prod \
+  --overwrite
+
+# Step 2 — anywhere (no credentials required)
+manifesta db drift  --input-dir ./snapshots/prod
+manifesta db merge  --input-dir ./snapshots/prod
+```
+
+---
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Export completed successfully |
+| `4` | `--connection` not provided, or directory could not be created |
+| `5` | Introspection failed (connection error, permission denied, etc.) |
 
 ---
 
@@ -44,7 +111,7 @@ manifesta db drift --connection "..." --output-dir ./reports
 |------|----------|---------|-------------|
 | `--connection` | One of these | — | ADO.NET connection string for the live database |
 | `--input-dir` | One of these | — | Directory of pre-exported `table.json` files to treat as the live snapshot |
-| `--provider` | No | `mysql` | Database provider: `mysql` or `postgres`. SQL Server requires the full edition. |
+| `--provider` | No | `mysql` | Database provider: `mysql`, `postgres`, or `sqlite`. SQL Server requires the full edition. |
 | `--schema` | No | — | Comma-separated schemas to restrict the comparison (e.g. `public,app`). Ignored for MySQL. |
 | `--strict` | No | false | Exit 1 on warnings (extra columns or tables in DB not present in the registry) |
 | `--include-schema` | No | false | Embed full before/after field listings for each drifted table in the report |
@@ -145,7 +212,7 @@ manifesta db merge --connection "..." --no-report
 |------|----------|---------|-------------|
 | `--connection` | One of these | — | ADO.NET connection string for the live database |
 | `--input-dir` | One of these | — | Directory of pre-exported `table.json` files to treat as the live snapshot |
-| `--provider` | No | `mysql` | Database provider: `mysql` or `postgres`. SQL Server requires the full edition. |
+| `--provider` | No | `mysql` | Database provider: `mysql`, `postgres`, or `sqlite`. SQL Server requires the full edition. |
 | `--schema` | No | — | Comma-separated schemas to restrict the merge (e.g. `public,app`). Ignored for MySQL. |
 | `--remove-deleted-columns` | No | false | Remove fields from registry files when they are absent from the live database (opt-in) |
 | `--remove-deleted-tables` | No | false | Delete registry files for tables absent from the live database. Requires `--remove-deleted-columns`. |

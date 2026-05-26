@@ -14,24 +14,25 @@ namespace Manifesta.Cli.Commands;
 file static class DbProviderHelper
 {
     internal static readonly Option<string> ProviderOption =
-        new(["--provider"], () => "mysql", "Database provider: mysql, postgres");
+        new(["--provider"], () => "mysql", "Database provider: mysql, postgres, sqlite");
 
     internal static DbProvider Parse(string? value) =>
         (value ?? "mysql").ToLowerInvariant() switch
         {
             "mysql"                    => DbProvider.MySql,
             "postgres" or "postgresql" => DbProvider.Postgres,
+            "sqlite"                   => DbProvider.Sqlite,
             "sqlserver"                => throw new ManifestaConfigException(
                 "SQL Server is not supported in the community edition. " +
                 "See https://github.com/umbrelon/manifesta-enterprise for the full edition."),
             var s => throw new ManifestaConfigException(
-                $"Unknown provider '{s}'. Valid values: mysql, postgres.")
+                $"Unknown provider '{s}'. Valid values: mysql, postgres, sqlite.")
         };
 
     internal static void WarnIfSchemaIgnored(string? schemaFilter, DbProvider provider, GlobalOptions globals)
     {
-        if (!string.IsNullOrWhiteSpace(schemaFilter) && provider == DbProvider.MySql)
-            OutputFormatter.WriteVerbose("--schema is not supported for MySQL and will be ignored.", globals);
+        if (!string.IsNullOrWhiteSpace(schemaFilter) && provider is DbProvider.MySql or DbProvider.Sqlite)
+            OutputFormatter.WriteVerbose($"--schema is not supported for {provider} and will be ignored.", globals);
     }
 
     internal static async Task<(IReadOnlyList<TableDefinition> Tables, string SourceDescription)>
@@ -52,7 +53,7 @@ file static class DbProviderHelper
             try
             {
                 tables = await introspector.IntrospectAsync(
-                    provider == DbProvider.MySql ? null : schemaFilter, ct);
+                    provider is DbProvider.MySql or DbProvider.Sqlite ? null : schemaFilter, ct);
             }
             catch (Exception ex)
             {
@@ -87,6 +88,7 @@ public sealed class DbCommand : Command
     public DbCommand() : base("db", "Database schema operations")
     {
         AddCommand(new DbDriftCommand());
+        AddCommand(new DbExportCommand());
         AddCommand(new DbMergeCommand());
     }
 }
@@ -493,6 +495,115 @@ public sealed class DbMergeCommand : ManifestCommandBase
                 globals);
             return (int)ExitCode.ValidationErrors;
         }
+
+        return (int)ExitCode.Success;
+    }
+}
+
+// ─── db export ────────────────────────────────────────────────────────────
+
+public sealed class DbExportCommand : ManifestCommandBase
+{
+    private readonly Option<string?> _connection   = new(["--connection"],    () => null,       "Database connection string (required)");
+    private readonly Option<string?> _outputDir    = new(["--output-dir"],    () => "./export", "Output directory for exported JSON files (default: ./export)");
+    private readonly Option<string?> _schema       = new(["--schema"],        () => null,       "Comma-separated schemas to export (default: all; ignored for MySQL and SQLite)");
+    private readonly Option<bool>    _includeViews = new(["--include-views"], () => false,      "Also export database views");
+    private readonly Option<bool>    _overwrite    = new(["--overwrite"],     () => false,      "Overwrite existing JSON files (without this flag, existing files are skipped)");
+    private readonly Option<string>  _provider     = DbProviderHelper.ProviderOption;
+
+    public DbExportCommand() : base("export", "Export live database schema to JSON files for use with --input-dir")
+    {
+        AddOption(_connection);
+        AddOption(_outputDir);
+        AddOption(_schema);
+        AddOption(_includeViews);
+        AddOption(_overwrite);
+        AddOption(_provider);
+
+        this.SetHandler(context => InvokeBaseAsync(context));
+    }
+
+    protected override async Task<int> ExecuteAsync(GlobalOptions globals, InvocationContext context, CancellationToken ct)
+    {
+        var pr           = context.ParseResult;
+        var connection   = pr.GetValueForOption(_connection);
+        var outputDirArg = pr.GetValueForOption(_outputDir) ?? "./export";
+        var schemaFilter = pr.GetValueForOption(_schema);
+        var includeViews = pr.GetValueForOption(_includeViews);
+        var overwrite    = pr.GetValueForOption(_overwrite);
+        var provider     = DbProviderHelper.Parse(pr.GetValueForOption(_provider));
+
+        // ── Flag validation ────────────────────────────────────────────────────
+        if (string.IsNullOrWhiteSpace(connection))
+            throw new ManifestaConfigException("--connection is required for db export.");
+
+        DbProviderHelper.WarnIfSchemaIgnored(schemaFilter, provider, globals);
+
+        // ── Resolve output directory ───────────────────────────────────────────
+        var outputDir = Path.GetFullPath(outputDirArg);
+        OutputFormatter.WriteVerbose($"Output directory: {outputDir}", globals);
+
+        // ── Introspect ─────────────────────────────────────────────────────────
+        OutputFormatter.WriteVerbose("Introspecting database…", globals);
+        var effectiveSchema = provider is DbProvider.MySql or DbProvider.Sqlite ? null : schemaFilter;
+        var introspector    = DatabaseIntrospectorRegistry.GetFactory().Create(provider, connection);
+
+        IReadOnlyList<TableDefinition> tables;
+        IReadOnlyList<TableDefinition> views;
+        try
+        {
+            tables = await introspector.IntrospectTablesOnlyAsync(effectiveSchema, ct);
+            views  = includeViews
+                ? await introspector.IntrospectViewsOnlyAsync(effectiveSchema, ct)
+                : Array.Empty<TableDefinition>();
+        }
+        catch (Exception ex)
+        {
+            throw new ManifestaSchemException($"Failed to introspect database: {ex.Message}");
+        }
+
+        OutputFormatter.WriteVerbose($"Found {tables.Count} table(s) and {views.Count} view(s)", globals);
+
+        if (tables.Count == 0 && views.Count == 0)
+        {
+            OutputFormatter.WriteLine("No tables or views found in the database. Nothing to export.", globals);
+            return (int)ExitCode.Success;
+        }
+
+        // ── Write files ────────────────────────────────────────────────────────
+        if (!globals.DryRun)
+        {
+            try { Directory.CreateDirectory(outputDir); }
+            catch (Exception ex) { throw new ManifestaConfigException($"Failed to create output directory: {ex.Message}"); }
+        }
+
+        IWriter writer  = globals.DryRun ? new DryRunWriter() : new AtomicWriter();
+        int     written = 0;
+        int     skipped = 0;
+
+        foreach (var table in tables.Concat(views))
+        {
+            var filePath = Path.Combine(outputDir, $"{table.Name}.json");
+
+            if (!overwrite && File.Exists(filePath))
+            {
+                OutputFormatter.WriteVerbose($"Skipped (already exists): {table.Name}.json", globals);
+                skipped++;
+                continue;
+            }
+
+            var json = TableDefinitionSerializer.Serialize(table);
+            await writer.WriteAsync(filePath, json, ct);
+            OutputFormatter.WriteVerbose($"Exported: {table.Name}.json", globals);
+            written++;
+        }
+
+        // ── Summary ────────────────────────────────────────────────────────────
+        var viewSummary = includeViews && views.Count > 0 ? $" (including {views.Count} view(s))" : "";
+        var skipSummary = skipped > 0 ? $", {skipped} skipped (already exist)" : "";
+        OutputFormatter.WriteLine(
+            $"Exported {written} file(s){viewSummary}{skipSummary} to {outputDir}",
+            globals);
 
         return (int)ExitCode.Success;
     }
