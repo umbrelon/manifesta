@@ -1,6 +1,6 @@
 # Manifesta OSS
 
-[![NuGet](https://img.shields.io/nuget/v/manifesta?label=manifesta&logo=nuget)](https://www.nuget.org/packages/manifesta)
+[![NuGet](https://img.shields.io/nuget/v/Rujasy.Manifesta?label=Rujasy.Manifesta&logo=nuget)](https://www.nuget.org/packages/Rujasy.Manifesta)
 [![Build](https://img.shields.io/github/actions/workflow/status/rujasy/manifesta/ci.yml?branch=main&logo=github)](https://github.com/rujasy/manifesta/actions)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![.NET 10](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet)](https://dotnet.microsoft.com/)
@@ -114,7 +114,7 @@ chmod +x manifesta-linux-x64
 If you already have the [.NET 10 SDK](https://dotnet.microsoft.com/) installed, you can install from NuGet instead:
 
 ```bash
-dotnet tool install --global manifesta
+dotnet tool install --global Rujasy.Manifesta
 manifesta --version
 ```
 
@@ -206,8 +206,9 @@ The schema registry is the hub. The init commands populate it; the doc and valid
 - [Common Workflows](docs/workflows.md) — first-time setup, CI validation, docs regeneration, dbdocs.io migration
 - [Configuration Reference](docs/config.md) — all `manifesta.config.json` properties
 - [table.json / section.json Reference](docs/table-json-reference.md) — complete field-level property reference
-- [Init Commands](docs/commands-init.md) — `init dbml`, `init prisma`
+- [Init Commands](docs/commands-init.md) — `init dbml`, `init prisma`, `init db`
 - [Doc Command](docs/commands-doc.md) — `doc db`
+- [DB Commands](docs/commands-db.md) — `db drift`, `db merge`
 - [Validate Commands](docs/commands-validate.md) — `validate schema`, `validate all`, `validate cross`
 - [Schema Features](docs/schema-features.md) — table.json format, FK kinds, sections, ERDs
 

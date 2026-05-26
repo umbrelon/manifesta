@@ -11,6 +11,8 @@
 - [Regenerate docs after schema changes](#regenerate-docs-after-schema-changes)
 - [Add manual descriptions after import](#add-manual-descriptions-after-import)
 - [Run full validation in CI](#run-full-validation-in-ci)
+- [Detect schema drift in CI](#detect-schema-drift-in-ci)
+- [Keep the registry in sync](#keep-the-registry-in-sync)
 - [Migrate from dbdocs.io](#migrate-from-dbdocsio)
 
 ---
@@ -138,7 +140,7 @@ jobs:
           dotnet-version: "10.x"
 
       - name: Install Manifesta
-        run: dotnet tool install --global manifesta
+        run: dotnet tool install --global Rujasy.Manifesta
 
       - name: Validate per-table rules
         run: manifesta validate all --strict --output-dir ./reports
@@ -155,6 +157,143 @@ jobs:
 ```
 
 `--strict` promotes warnings to errors so they block the PR. Remove it if you want warnings to pass silently.
+
+---
+
+## Detect schema drift in CI
+
+Use `db drift` as a read-only CI gate that exits `1` when the live database has diverged from the schema registry. No registry files are written.
+
+The `--input-dir` mode is the CI-friendly path — export a snapshot from the database, commit it to an artifact, and compare without needing a live connection inside CI:
+
+**GitHub Actions example (live connection):**
+
+```yaml
+name: Schema drift check
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # daily at 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Manifesta
+        run: |
+          curl -sSL https://github.com/rujasy/manifesta/releases/latest/download/manifesta-linux-x64 \
+            -o /usr/local/bin/manifesta
+          chmod +x /usr/local/bin/manifesta
+
+      - name: Check for schema drift
+        env:
+          DB_CONNECTION: ${{ secrets.DB_CONNECTION }}
+        run: |
+          manifesta db drift \
+            --provider postgres \
+            --connection "$DB_CONNECTION" \
+            --output-dir ./reports \
+            --strict
+
+      - name: Upload drift report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report
+          path: reports/drift-report.md
+```
+
+**Using pre-exported JSON files (no live connection in CI):**
+
+```bash
+# Step 1 (local or in a privileged pipeline): export a live snapshot
+manifesta db drift --provider postgres --connection "..." --input-dir ./snapshots
+
+# Step 2 (CI): compare registry against the committed snapshot — no credentials needed
+manifesta db drift --input-dir ./snapshots --output-dir ./reports
+```
+
+`--strict` promotes "extra tables in DB not in registry" warnings to failures. Remove it if you only care about structural drift in tracked tables.
+
+---
+
+## Keep the registry in sync
+
+When `db drift` reports changes, use `db merge` to pull those changes into the registry. Run `db merge` locally, review the diff, then commit.
+
+**Standard day-2 workflow:**
+
+```bash
+# 1. See what has changed
+manifesta db drift \
+  --provider postgres \
+  --connection "$DB_CONNECTION" \
+  --output-dir ./reports
+
+# drift-report.md now lists every change. Review it.
+cat reports/drift-report.md
+
+# 2. Preview the merge without writing any files
+manifesta db merge \
+  --provider postgres \
+  --connection "$DB_CONNECTION" \
+  --dry-run
+
+# 3. Apply the merge
+manifesta db merge \
+  --provider postgres \
+  --connection "$DB_CONNECTION" \
+  --output-dir ./reports
+
+# 4. Regenerate docs and validate
+manifesta doc db --output-dir ./publish
+manifesta validate all --strict
+manifesta validate cross
+
+# 5. Commit
+git add tables/ publish/ reports/merge-report.md
+git commit -m "chore: sync schema registry with production"
+```
+
+**Handling new tables:**
+
+New tables discovered in the DB are written to `<root>/tables/` by default. Use `--new-table-dir` to route them elsewhere, or `--skip-new-tables` to ignore them entirely on this run:
+
+```bash
+# Write new tables to a staging directory for review before promoting
+manifesta db merge --connection "..." --new-table-dir ./tables/pending
+
+# Or skip new tables and only update what is already tracked
+manifesta db merge --connection "..." --skip-new-tables
+```
+
+**Removing deleted columns and tables:**
+
+By default `db merge` keeps fields that no longer exist in the DB (reporting them as orphan columns) so you can review before deleting. Opt in explicitly when you are ready:
+
+```bash
+# Remove columns absent from the DB
+manifesta db merge --connection "..." --remove-deleted-columns
+
+# Also delete registry files for tables absent from the DB
+manifesta db merge --connection "..." --remove-deleted-columns --remove-deleted-tables
+```
+
+**Air-gapped / export-then-merge workflow:**
+
+In environments where CI cannot reach the database directly, export a snapshot first and merge from the files:
+
+```bash
+# On a machine with DB access: export a snapshot
+manifesta db drift --provider mysql --connection "..." --input-dir ./snapshots
+# (or use init db to produce the raw JSON files)
+
+# Anywhere else: merge from the snapshot
+manifesta db merge --input-dir ./snapshots
+```
 
 ---
 

@@ -13,6 +13,29 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <DebugType>embedded</DebugType>
   </PropertyGroup>
+
+  <!-- NuGet tool package metadata -->
+  <PropertyGroup>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>manifesta</ToolCommandName>
+    <PackageId>Rujasy.Manifesta</PackageId>
+    <!-- Version is overridden by CI: -p:Version=$(git tag). Keep placeholder at 0.0.0. -->
+    <Version>0.0.0</Version>
+    <Authors>RUJASY VOF</Authors>
+    <Company>RUJASY VOF</Company>
+    <Description>Schema documentation engine — import, validate, and generate docs from your database schema. Supports MySQL and PostgreSQL introspection, DBML and Prisma bootstrap, Markdown + ERD documentation generation, and schema validation.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/rujasy/manifesta</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/rujasy/manifesta</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>schema;documentation;database;mysql;postgresql;erd;markdown;dbml;prisma;cli;devtools</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <!-- Include the repo README in the NuGet package -->
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <PackageReference Include="YamlDotNet"         Version="16.3.0" />

@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Build & Test ─────────────────────────────────────────────────────────────
+  build:
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      - name: Test
+        run: dotnet test --no-build -c Release
+
+  # ── Release ──────────────────────────────────────────────────────────────────
+  release:
+    name: Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Restore
+        run: dotnet restore
+
+      # ── NuGet tool package ────────────────────────────────────────────────────
+      - name: Pack NuGet tool
+        run: |
+          dotnet pack src/Manifesta.Cli \
+            -c Release \
+            --no-restore \
+            -p:Version=${{ steps.version.outputs.VERSION }} \
+            -o ./artifacts/nuget
+
+      - name: Push to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push ./artifacts/nuget/*.nupkg \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      # ── Self-contained binaries ───────────────────────────────────────────────
+      - name: Publish self-contained binaries
+        shell: bash
+        run: |
+          for rid in linux-x64 linux-arm64 win-x64 osx-x64 osx-arm64; do
+            dotnet publish src/Manifesta.Cli \
+              -r $rid \
+              -c Release \
+              --no-restore \
+              -p:Version=${{ steps.version.outputs.VERSION }} \
+              -o ./artifacts/bin/$rid
+          done
+
+      - name: Stage release assets
+        shell: bash
+        run: |
+          mkdir -p ./artifacts/release
+          cp ./artifacts/bin/linux-x64/manifesta    ./artifacts/release/manifesta-linux-x64
+          cp ./artifacts/bin/linux-arm64/manifesta  ./artifacts/release/manifesta-linux-arm64
+          cp ./artifacts/bin/win-x64/manifesta.exe  ./artifacts/release/manifesta-win-x64.exe
+          cp ./artifacts/bin/osx-x64/manifesta      ./artifacts/release/manifesta-osx-x64
+          cp ./artifacts/bin/osx-arm64/manifesta    ./artifacts/release/manifesta-osx-arm64
+
+      # ── GitHub Release ────────────────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            ./artifacts/release/manifesta-linux-x64
+            ./artifacts/release/manifesta-linux-arm64
+            ./artifacts/release/manifesta-win-x64.exe
+            ./artifacts/release/manifesta-osx-x64
+            ./artifacts/release/manifesta-osx-arm64
+            ./artifacts/nuget/*.nupkg

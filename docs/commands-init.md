@@ -192,19 +192,19 @@ Use `--provider` to override the detected provider when the `datasource` block i
 
 ```bash
 # MySQL
-manifesta init db --provider mysql --connection-string "Server=localhost;Database=mydb;Uid=root;Pwd=secret;"
+manifesta init db --provider mysql --connection "Server=localhost;Database=mydb;Uid=root;Pwd=secret;"
 
 # PostgreSQL
-manifesta init db --provider postgres --connection-string "Host=localhost;Database=mydb;Username=postgres;Password=secret;"
+manifesta init db --provider postgres --connection "Host=localhost;Database=mydb;Username=postgres;Password=secret;"
 
 # Apply a schema filter (PostgreSQL example — only introspect the 'public' and 'app' schemas)
-manifesta init db --provider postgres --connection-string "..." --schema public,app
+manifesta init db --provider postgres --connection "..." --schema public,app
 
 # Preview without writing any files
-manifesta init db --provider mysql --connection-string "..." --dry-run
+manifesta init db --provider mysql --connection "..." --dry-run
 
 # Overwrite existing table.json files
-manifesta init db --provider postgres --connection-string "..." --overwrite
+manifesta init db --provider postgres --connection "..." --overwrite
 ```
 
 **Flags:**
@@ -212,7 +212,7 @@ manifesta init db --provider postgres --connection-string "..." --overwrite
 | Flag | Required | Default | Description |
 |------|----------|---------|-------------|
 | `--provider` | Yes | — | Database provider: `mysql` or `postgres` (OSS); `sqlserver` requires full edition |
-| `--connection-string` | Yes | — | ADO.NET connection string for the target database |
+| `--connection` | Yes | — | ADO.NET connection string for the target database |
 | `--output-dir` | No | `./tables` | Directory for generated `table.json` files |
 | `--schema` | No | — | Comma-separated list of schemas to include (e.g. `public,app`). When omitted, all non-system schemas are introspected |
 | `--dry-run` | No | false | Preview what would be written without creating any files |

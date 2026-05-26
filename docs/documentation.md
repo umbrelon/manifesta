@@ -15,6 +15,9 @@
   - [Init Prisma](./commands-init.md#init-prisma)
 - [Commands — Documentation](./commands-doc.md)
   - [Doc DB](./commands-doc.md#doc-db)
+- [Commands — Database](./commands-db.md)
+  - [DB Drift](./commands-db.md#db-drift)
+  - [DB Merge](./commands-db.md#db-merge)
 - [Commands — Validation](./commands-validate.md)
   - [Validate Schema](./commands-validate.md#validate-schema)
   - [Validate All](./commands-validate.md#validate-all)
@@ -85,8 +88,11 @@ Produces `./reports/validation.json` — a structured JSON report listing every 
 
 ```
 manifesta init dbml --input <file> [--output-dir <dir>] [--schema <prefix>] [--overwrite]
-manifesta init prisma --input <file> [--output-dir <dir>] [--provider sqlserver|mysql|postgres]
+manifesta init prisma --input <file> [--output-dir <dir>] [--provider mysql|postgres]
+manifesta init db --provider mysql|postgres --connection <cs> [--schema <schemas>]
 manifesta doc db [--format markdown|dbml] [--output <file>] [--output-dir <dir>]
+manifesta db drift --connection <cs>|--input-dir <dir> [--provider mysql|postgres] [--strict]
+manifesta db merge --connection <cs>|--input-dir <dir> [--provider mysql|postgres] [--dry-run]
 manifesta validate schema <type> --output-dir <dir>
 manifesta validate all [--strict] [--output-dir <dir>]
 manifesta validate cross [--output <file>] [--output-dir <dir>]
