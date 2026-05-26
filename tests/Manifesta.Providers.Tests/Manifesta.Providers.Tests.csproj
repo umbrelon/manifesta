@@ -16,6 +16,9 @@
     </PackageReference>
     <PackageReference Include="FluentAssertions"          Version="6.12.2" />
     <PackageReference Include="Microsoft.Data.Sqlite"     Version="9.0.5" />
+    <PackageReference Include="Testcontainers"            Version="3.8.0" />
+    <PackageReference Include="Testcontainers.MySql"      Version="3.8.0" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="3.8.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Manifesta.Providers\Manifesta.Providers.csproj" />
