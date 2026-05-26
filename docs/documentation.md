@@ -19,6 +19,7 @@
 - [Commands — Database](./commands-db.md)
   - [DB Export](./commands-db.md#db-export)
   - [DB Drift](./commands-db.md#db-drift)
+  - [DB Drift — DDL file](./commands-db.md#db-drift---ddl-file)
   - [DB Merge](./commands-db.md#db-merge)
 - [Commands — Validation](./commands-validate.md)
   - [Validate Schema](./commands-validate.md#validate-schema)
@@ -95,7 +96,7 @@ manifesta init sql    --input <file|dir> [--provider mysql|postgres|sqlite|sqlse
 manifesta init db     --provider mysql|postgres --connection <cs> [--schema <schemas>]
 manifesta doc db [--format markdown|dbml] [--output <file>] [--output-dir <dir>]
 manifesta db export --connection <cs> [--provider mysql|postgres|sqlite] [--output-dir <dir>] [--include-views] [--overwrite]
-manifesta db drift  --connection <cs>|--input-dir <dir> [--provider mysql|postgres|sqlite] [--strict]
+manifesta db drift  --connection <cs>|--input-dir <dir>|--ddl-file <path> [--provider mysql|postgres|sqlite|sqlserver] [--strict]
 manifesta db merge  --connection <cs>|--input-dir <dir> [--provider mysql|postgres|sqlite] [--dry-run]
 manifesta validate schema <type> --output-dir <dir>
 manifesta validate all [--strict] [--output-dir <dir>]

@@ -6,6 +6,7 @@ using Manifesta.Core.Filtering;
 using Manifesta.Core.IR;
 using Manifesta.Core.Merge;
 using Manifesta.Core.Pipeline;
+using Manifesta.Cli;
 
 namespace Manifesta.Cli.Commands;
 
@@ -14,8 +15,14 @@ namespace Manifesta.Cli.Commands;
 file static class DbProviderHelper
 {
     internal static readonly Option<string> ProviderOption =
-        new(["--provider"], () => "mysql", "Database provider: mysql, postgres, sqlite");
+        new(["--provider"], () => "mysql",
+            "Database provider: mysql, postgres, sqlite. " +
+            "Also accepts sqlserver when used with --ddl-file (pure text parsing, no live connection).");
 
+    /// <summary>
+    /// Parses the provider for live-connection and input-dir modes.
+    /// SQL Server is rejected here — it requires the full edition for live introspection.
+    /// </summary>
     internal static DbProvider Parse(string? value) =>
         (value ?? "mysql").ToLowerInvariant() switch
         {
@@ -27,6 +34,22 @@ file static class DbProviderHelper
                 "See https://github.com/umbrelon/manifesta-enterprise for the full edition."),
             var s => throw new ManifestaConfigException(
                 $"Unknown provider '{s}'. Valid values: mysql, postgres, sqlite.")
+        };
+
+    /// <summary>
+    /// Parses the provider for <c>--ddl-file</c> mode.
+    /// SQL Server is accepted here because DDL parsing requires no live connection —
+    /// the enterprise gate applies to live introspection only.
+    /// </summary>
+    internal static DbProvider ParseForDdl(string? value) =>
+        (value ?? "mysql").ToLowerInvariant() switch
+        {
+            "mysql"                    => DbProvider.MySql,
+            "postgres" or "postgresql" => DbProvider.Postgres,
+            "sqlite"                   => DbProvider.Sqlite,
+            "sqlserver" or "mssql"     => DbProvider.SqlServer,
+            var s => throw new ManifestaConfigException(
+                $"Unknown provider '{s}'. Valid values: mysql, postgres, sqlite, sqlserver.")
         };
 
     internal static void WarnIfSchemaIgnored(string? schemaFilter, DbProvider provider, GlobalOptions globals)
@@ -97,25 +120,43 @@ public sealed class DbCommand : Command
 
 public sealed class DbDriftCommand : ManifestCommandBase
 {
-    private readonly Option<string?> _connection    = new(["--connection"],     () => null,  "Database connection string (mutually exclusive with --input-dir)");
-    private readonly Option<string?> _inputDir      = new(["--input-dir"],      () => null,  "Directory of pre-exported JSON files (mutually exclusive with --connection)");
-    private readonly Option<string?> _schema        = new(["--schema"],         () => null,  "Comma-separated schemas to scope the comparison (default: all; ignored for MySQL)");
+    private readonly Option<string?> _connection    = new(["--connection"],     () => null,  "Database connection string (mutually exclusive with --input-dir and --ddl-file)");
+    private readonly Option<string?> _inputDir      = new(["--input-dir"],      () => null,  "Directory of pre-exported JSON files (mutually exclusive with --connection and --ddl-file)");
+    private readonly Option<string?> _ddlFile       = new(["--ddl-file"],       () => null,
+        "Path to a .sql file or directory of .sql files to diff against the registry " +
+        "(mutually exclusive with --connection and --input-dir). " +
+        "Supports mysql, postgres, sqlite, and sqlserver (no live connection required).");
+    private readonly Option<string?> _schema        = new(["--schema"],         () => null,
+        "Schema handling — meaning depends on mode: " +
+        "with --connection/--input-dir: comma-separated schema filter (default: all, ignored for MySQL/SQLite); " +
+        "with --ddl-file: prefix applied to unqualified table names (same as init sql --schema).");
     private readonly Option<bool>    _strict        = new(["--strict"],         () => false, "Exit 1 on warnings (extra columns/tables in DB not in repo)");
     private readonly Option<bool>    _includeSchema = new(["--include-schema"], () => false, "Embed full before/after field listings for drifted tables in the report");
     private readonly Option<string?> _output        = new(["--output"],         () => null,  "Full output file path (overrides --output-dir)");
     private readonly Option<string?> _outputDir     = new(["--output-dir"],     () => null,  "Output directory");
     private readonly Option<string>  _provider      = DbProviderHelper.ProviderOption;
+    private readonly Option<bool>    _recursive     = new(["--recursive", "-r"], () => false,
+        "Expand a plain filename --pattern to all subdirectories. " +
+        "Ignored when --pattern already contains a path separator or **. " +
+        "Only applicable when --ddl-file is a directory.");
+    private readonly Option<string>  _pattern       = new(["--pattern"],        () => "*.sql",
+        "Glob pattern for file matching when --ddl-file is a directory (default: *.sql). " +
+        "Plain filename patterns (e.g. *_up.sql) are controlled by --recursive. " +
+        "Path globs (e.g. 2024/**/*.sql, **/create_*.sql) are matched directly.");
 
-    public DbDriftCommand() : base("drift", "Compare repository definitions against a live database (read-only)")
+    public DbDriftCommand() : base("drift", "Compare repository definitions against a live database or DDL file (read-only)")
     {
         AddOption(_connection);
         AddOption(_inputDir);
+        AddOption(_ddlFile);
         AddOption(_schema);
         AddOption(_strict);
         AddOption(_includeSchema);
         AddOption(_output);
         AddOption(_outputDir);
         AddOption(_provider);
+        AddOption(_recursive);
+        AddOption(_pattern);
 
         this.SetHandler(context => InvokeBaseAsync(context));
     }
@@ -125,19 +166,27 @@ public sealed class DbDriftCommand : ManifestCommandBase
         var pr            = context.ParseResult;
         var connection    = pr.GetValueForOption(_connection);
         var inputDir      = pr.GetValueForOption(_inputDir);
-        var schemaFilter  = pr.GetValueForOption(_schema);
+        var ddlFile       = pr.GetValueForOption(_ddlFile);
+        var schema        = pr.GetValueForOption(_schema);
         var strict        = pr.GetValueForOption(_strict);
         var includeSchema = pr.GetValueForOption(_includeSchema);
         var outputArg     = pr.GetValueForOption(_output);
         var outputDir     = pr.GetValueForOption(_outputDir);
-        var provider      = DbProviderHelper.Parse(pr.GetValueForOption(_provider));
+        var providerStr   = pr.GetValueForOption(_provider);
+        var recursive     = pr.GetValueForOption(_recursive);
+        var pattern       = pr.GetValueForOption(_pattern) ?? "*.sql";
 
         // ── Flag validation ────────────────────────────────────────────────────
-        if (string.IsNullOrWhiteSpace(connection) && string.IsNullOrWhiteSpace(inputDir))
-            throw new ManifestaConfigException("Either --connection or --input-dir must be provided.");
+        var modeCount = new[] { connection, inputDir, ddlFile }
+            .Count(s => !string.IsNullOrWhiteSpace(s));
 
-        if (!string.IsNullOrWhiteSpace(connection) && !string.IsNullOrWhiteSpace(inputDir))
-            throw new ManifestaConfigException("--connection and --input-dir are mutually exclusive. Provide exactly one.");
+        if (modeCount == 0)
+            throw new ManifestaConfigException(
+                "Exactly one of --connection, --input-dir, or --ddl-file must be provided.");
+
+        if (modeCount > 1)
+            throw new ManifestaConfigException(
+                "--connection, --input-dir, and --ddl-file are mutually exclusive. Provide exactly one.");
 
         // ── Resolve root ───────────────────────────────────────────────────────
         var config   = ConfigLoader.Load(globals);
@@ -145,8 +194,78 @@ public sealed class DbDriftCommand : ManifestCommandBase
         OutputFormatter.WriteVerbose($"Root: {rootPath}", globals);
 
         // ── Load live definitions ──────────────────────────────────────────────
-        var (liveTables, sourceDescription) =
-            await DbProviderHelper.LoadLiveTablesAsync(connection, inputDir, schemaFilter, provider, globals, ct);
+        IReadOnlyList<TableDefinition> liveTables;
+        string sourceDescription;
+
+        if (!string.IsNullOrWhiteSpace(ddlFile))
+        {
+            // ── DDL file mode ────────────────────────────────────────────────
+            // SQL Server is allowed here — no live connection is made.
+            var provider = DbProviderHelper.ParseForDdl(providerStr);
+
+            var sqlFiles = SqlDdlFileCollector.Collect(
+                Path.GetFullPath(ddlFile), pattern, recursive, globals);
+            if (sqlFiles is null)
+                return (int)ExitCode.FatalSchemaErrors;
+
+            var allTables = new List<TableDefinition>();
+            var allErrors = new List<string>();
+
+            foreach (var file in sqlFiles)
+            {
+                OutputFormatter.WriteVerbose($"Parsing: {file}", globals);
+                string sql;
+                try { sql = await File.ReadAllTextAsync(file, ct); }
+                catch (Exception ex)
+                {
+                    OutputFormatter.WriteError($"Could not read {file}: {ex.Message}");
+                    return (int)ExitCode.FatalSchemaErrors;
+                }
+
+                // --schema acts as a prefix for unqualified DDL table names
+                var result = new SqlDdlParser().Parse(sql, provider, schemaPrefix: schema);
+                foreach (var err in result.Errors)
+                    OutputFormatter.WriteError($"[{Path.GetFileName(file)}] {err}");
+                allErrors.AddRange(result.Errors);
+                allTables.AddRange(result.Tables);
+            }
+
+            // Duplicate table names across files are a fatal error — they would
+            // produce an ambiguous diff.
+            var duplicates = allTables
+                .GroupBy(t => t.Name, TableNames.Comparer)
+                .Where(g => g.Count() > 1)
+                .ToList();
+            foreach (var dup in duplicates)
+                OutputFormatter.WriteError(
+                    $"Duplicate table name '{dup.Key}' found across DDL input files.");
+            if (duplicates.Count > 0)
+                return (int)ExitCode.FatalSchemaErrors;
+
+            // Parse errors stop here unless the caller has opted in to best-effort mode.
+            if (allErrors.Count > 0 && !globals.WarnOnly)
+            {
+                OutputFormatter.WriteError(
+                    "DDL parse errors detected. Fix the errors or use --warn-only to proceed with best-effort results.");
+                return (int)ExitCode.ValidationErrors;
+            }
+
+            liveTables        = allTables.AsReadOnly();
+            sourceDescription = $"--ddl-file ({ddlFile})";
+            OutputFormatter.WriteVerbose(
+                $"DDL tables parsed: {liveTables.Count}" +
+                (allErrors.Count > 0 ? $" ({allErrors.Count} parse error(s) ignored via --warn-only)" : ""),
+                globals);
+        }
+        else
+        {
+            // ── Connection / input-dir mode ──────────────────────────────────
+            // SQL Server is enterprise-only for live introspection.
+            var provider = DbProviderHelper.Parse(providerStr);
+            (liveTables, sourceDescription) =
+                await DbProviderHelper.LoadLiveTablesAsync(
+                    connection, inputDir, schema, provider, globals, ct);
+        }
 
         OutputFormatter.WriteVerbose($"Live tables loaded: {liveTables.Count}", globals);
 

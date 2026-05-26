@@ -30,6 +30,7 @@ Manifesta OSS lets you bootstrap a schema registry from an existing DBML or Pris
 | `manifesta db export --connection <cs>` | Snapshot a live database to JSON files for use with `--input-dir` |
 | `manifesta db drift --connection <cs>` | Compare repo definitions against a live MySQL, PostgreSQL, or SQLite database |
 | `manifesta db drift --input-dir <dir>` | Compare repo definitions against pre-exported JSON files (CI-friendly, no live connection) |
+| `manifesta db drift --ddl-file <path>` | Compare repo definitions against SQL DDL files — all four dialects including SQL Server (OSS); no live connection required |
 | `manifesta db merge --connection <cs>` | Pull live schema changes back into the repository JSON files |
 | `manifesta db merge --input-dir <dir>` | Merge from pre-exported JSON files (air-gapped workflow) |
 

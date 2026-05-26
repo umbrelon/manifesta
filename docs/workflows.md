@@ -13,6 +13,7 @@
 - [Add manual descriptions after import](#add-manual-descriptions-after-import)
 - [Run full validation in CI](#run-full-validation-in-ci)
 - [Detect schema drift in CI](#detect-schema-drift-in-ci)
+- [Verify DDL matches registry in CI](#verify-ddl-matches-registry-in-ci)
 - [Keep the registry in sync](#keep-the-registry-in-sync)
 - [Export a schema snapshot](#export-a-schema-snapshot)
 - [Migrate from dbdocs.io](#migrate-from-dbdocsio)
@@ -207,6 +208,82 @@ jobs:
 ```
 
 `--strict` promotes warnings to errors so they block the PR. Remove it if you want warnings to pass silently.
+
+---
+
+## Verify DDL matches registry in CI
+
+Use `db drift --ddl-file` when your schema source of truth is a SQL DDL file (or a directory of migration scripts) rather than a live database. No database connection is required, and **SQL Server T-SQL is supported in the OSS edition** — making this the primary CI pattern for SQL Server shops.
+
+**Single T-SQL file:**
+
+```bash
+# Verify that the registry still matches the authoritative DDL
+manifesta db drift \
+  --ddl-file tables.sql \
+  --provider sqlserver \
+  --schema dbo \
+  --output-dir ./reports
+```
+
+`--schema dbo` applies the `dbo.` prefix to any unqualified table names in the DDL — the same behaviour as `init sql --schema dbo`. Skip it if your DDL already uses fully qualified names like `CREATE TABLE dbo.Customer`.
+
+**GitHub Actions example (SQL Server DDL in repo):**
+
+```yaml
+name: Registry vs DDL drift check
+
+on: [push, pull_request]
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Manifesta
+        run: dotnet tool install --global Rujasy.Manifesta
+
+      - name: Verify registry matches DDL
+        run: |
+          manifesta db drift \
+            --ddl-file ./sql/tables.sql \
+            --provider sqlserver \
+            --schema dbo \
+            --output-dir ./reports \
+            --strict
+
+      - name: Upload drift report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report
+          path: reports/drift-report.md
+```
+
+**Migration directory (recursive, filtering "up" files only):**
+
+```bash
+# Compare registry against every up-migration across all subdirectories
+manifesta db drift \
+  --ddl-file ./migrations \
+  --provider mysql \
+  --pattern "**/*_up.sql" \
+  --output-dir ./reports
+```
+
+**Handling DDL files with unsupported statements:**
+
+Migration scripts often contain `CREATE INDEX`, stored procedure definitions, or other statements that Manifesta does not parse as tables. By default these cause an exit `1` before the diff runs (a partial parse could produce a misleading report). Use `--warn-only` to proceed with best-effort results:
+
+```bash
+manifesta db drift \
+  --ddl-file ./migrations \
+  --provider postgres \
+  --recursive \
+  --warn-only \
+  --output-dir ./reports
+```
 
 ---
 

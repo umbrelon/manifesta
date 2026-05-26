@@ -5,7 +5,6 @@ using Manifesta.Core;
 using Manifesta.Core.Filtering;
 using Manifesta.Core.IR;
 using Manifesta.Core.Pipeline;
-using Microsoft.Extensions.FileSystemGlobbing;
 
 namespace Manifesta.Cli.Commands;
 
@@ -582,58 +581,9 @@ public sealed class InitSqlCommand : ManifestCommandBase
         var pattern   = pr.GetValueForOption(_pattern) ?? "*.sql";
 
         // ── Collect .sql files ────────────────────────────────────────────────
-        List<string> sqlFiles;
-
-        if (Directory.Exists(inputPath))
-        {
-            // Determine whether the pattern already encodes path structure.
-            // A pattern is a "path glob" if it contains / \ or **.
-            // Plain filename patterns (e.g. *.sql, *_up.sql) are purely name-based.
-            bool isPathGlob = pattern.Contains('/') ||
-                              pattern.Contains('\\') ||
-                              pattern.Contains("**");
-
-            if (isPathGlob && recursive)
-                OutputFormatter.WriteVerbose(
-                    "--recursive is ignored because --pattern already contains a path glob.", globals);
-
-            // Resolve effective glob pattern:
-            //   path glob  → use as-is (normalise backslashes to forward-slashes)
-            //   filename   → --recursive prepends **/ ; without it matches root only
-            var effectivePattern = isPathGlob
-                ? pattern.Replace('\\', '/')
-                : (recursive ? $"**/{pattern}" : pattern);
-
-            var matcher = new Matcher(StringComparison.OrdinalIgnoreCase);
-            matcher.AddInclude(effectivePattern);
-
-            sqlFiles = matcher
-                .GetResultsInFullPath(inputPath)
-                .OrderBy(f => f)
-                .ToList();
-
-            if (sqlFiles.Count == 0)
-            {
-                var hint = !recursive && !isPathGlob
-                    ? " (use --recursive to also search subdirectories)"
-                    : string.Empty;
-                OutputFormatter.WriteError(
-                    $"No files matching '{effectivePattern}' found in: {inputPath}{hint}");
-                return (int)ExitCode.FatalSchemaErrors;
-            }
-
-            OutputFormatter.WriteVerbose(
-                $"Found {sqlFiles.Count} file(s) matching '{effectivePattern}'", globals);
-        }
-        else if (File.Exists(inputPath))
-        {
-            sqlFiles = [inputPath];
-        }
-        else
-        {
-            OutputFormatter.WriteError($"Input not found: {inputPath}");
+        var sqlFiles = SqlDdlFileCollector.Collect(inputPath, pattern, recursive, globals);
+        if (sqlFiles is null)
             return (int)ExitCode.FatalSchemaErrors;
-        }
 
         // ── Parse all files ───────────────────────────────────────────────────
         var parser   = new SqlDdlParser();
