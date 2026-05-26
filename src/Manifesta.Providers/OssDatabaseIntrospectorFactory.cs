@@ -5,7 +5,7 @@ namespace Manifesta.Providers;
 
 /// <summary>
 /// Database introspector factory for the OSS edition.
-/// Supports MySQL and PostgreSQL; throws <see cref="NotSupportedException"/> for SQL Server
+/// Supports MySQL, PostgreSQL, and SQLite; throws <see cref="NotSupportedException"/> for SQL Server
 /// (SQL Server introspection requires the full edition of Manifesta).
 /// </summary>
 public sealed class OssDatabaseIntrospectorFactory : IDatabaseIntrospectorFactory
@@ -13,8 +13,9 @@ public sealed class OssDatabaseIntrospectorFactory : IDatabaseIntrospectorFactor
     public IDatabaseIntrospector Create(DbProvider provider, string connectionString) =>
         provider switch
         {
-            DbProvider.MySql    => new MySqlDatabaseIntrospector(connectionString),
-            DbProvider.Postgres => new PostgresDatabaseIntrospector(connectionString),
+            DbProvider.MySql     => new MySqlDatabaseIntrospector(connectionString),
+            DbProvider.Postgres  => new PostgresDatabaseIntrospector(connectionString),
+            DbProvider.Sqlite    => new SqliteDatabaseIntrospector(connectionString),
             DbProvider.SqlServer => throw new NotSupportedException(
                 "SQL Server introspection requires the full edition of Manifesta. " +
                 "See https://github.com/umbrelon/manifesta-enterprise"),
@@ -24,8 +25,9 @@ public sealed class OssDatabaseIntrospectorFactory : IDatabaseIntrospectorFactor
     public IReferenceDataCapturer CreateCapturer(DbProvider provider, string connectionString) =>
         provider switch
         {
-            DbProvider.MySql    => new MySqlReferenceDataCapturer(connectionString),
-            DbProvider.Postgres => new PostgresReferenceDataCapturer(connectionString),
+            DbProvider.MySql     => new MySqlReferenceDataCapturer(connectionString),
+            DbProvider.Postgres  => new PostgresReferenceDataCapturer(connectionString),
+            DbProvider.Sqlite    => new SqliteReferenceDataCapturer(connectionString),
             DbProvider.SqlServer => throw new NotSupportedException(
                 "SQL Server reference data capture requires the full edition of Manifesta. " +
                 "See https://github.com/umbrelon/manifesta-enterprise"),

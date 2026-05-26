@@ -63,13 +63,14 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
-    public async Task InitDbHelp_ShowsMySqlAndPostgresNotSqlServer()
+    public async Task InitDbHelp_ShowsMySqlPostgresAndSqliteNotSqlServer()
     {
         if (BinPath is null) return;
         var (code, stdout, _) = await RunAsync("init", "db", "--help");
         code.Should().Be(0);
         stdout.Should().Contain("mysql");
         stdout.Should().Contain("postgres");
+        stdout.Should().Contain("sqlite");
         stdout.Should().NotContain("sqlserver");
     }
 

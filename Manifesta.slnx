@@ -9,5 +9,6 @@
     <Project Path="tests/Manifesta.Core.Tests/Manifesta.Core.Tests.csproj" />
     <Project Path="tests/Manifesta.Doc.Tests/Manifesta.Doc.Tests.csproj" />
     <Project Path="tests/Manifesta.Cli.Tests/Manifesta.Cli.Tests.csproj" />
+    <Project Path="tests/Manifesta.Providers.Tests/Manifesta.Providers.Tests.csproj" />
   </Folder>
 </Solution>

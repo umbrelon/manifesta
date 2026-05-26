@@ -13,24 +13,25 @@ namespace Manifesta.Cli.Commands;
 file static class InitProviderHelper
 {
     internal static readonly Option<string> ProviderOption =
-        new(["--provider"], () => "mysql", "Database provider: mysql, postgres");
+        new(["--provider"], () => "mysql", "Database provider: mysql, postgres, sqlite");
 
     internal static DbProvider Parse(string? value) =>
         (value ?? "mysql").ToLowerInvariant() switch
         {
             "mysql"                    => DbProvider.MySql,
             "postgres" or "postgresql" => DbProvider.Postgres,
+            "sqlite"                   => DbProvider.Sqlite,
             "sqlserver"                => throw new ManifestaConfigException(
                 "SQL Server is not supported in the community edition. " +
                 "See https://github.com/umbrelon/manifesta-enterprise for the full edition."),
             var s => throw new ManifestaConfigException(
-                $"Unknown provider '{s}'. Valid values: mysql, postgres.")
+                $"Unknown provider '{s}'. Valid values: mysql, postgres, sqlite.")
         };
 
     internal static void WarnIfSchemaIgnored(string? schema, DbProvider provider, GlobalOptions globals)
     {
-        if (!string.IsNullOrWhiteSpace(schema) && provider == DbProvider.MySql)
-            OutputFormatter.WriteVerbose("--schema is not supported for MySQL and will be ignored.", globals);
+        if (!string.IsNullOrWhiteSpace(schema) && provider is DbProvider.MySql or DbProvider.Sqlite)
+            OutputFormatter.WriteVerbose($"--schema is not supported for {provider} and will be ignored.", globals);
     }
 }
 
@@ -129,10 +130,10 @@ public sealed class InitDbCommand : ManifestCommandBase
 
             InitProviderHelper.WarnIfSchemaIgnored(schemaFilter, provider, globals);
             OutputFormatter.WriteVerbose($"init db → {outputDir}", globals);
-            if (schemaFilter != null && provider != DbProvider.MySql)
+            if (schemaFilter != null && provider is not DbProvider.MySql and not DbProvider.Sqlite)
                 OutputFormatter.WriteVerbose($"Schema filter: {schemaFilter}", globals);
 
-            var effectiveSchema = provider == DbProvider.MySql ? null : schemaFilter;
+            var effectiveSchema = provider is DbProvider.MySql or DbProvider.Sqlite ? null : schemaFilter;
             var introspector    = DatabaseIntrospectorRegistry.GetFactory().Create(provider, connectionString);
             try
             {

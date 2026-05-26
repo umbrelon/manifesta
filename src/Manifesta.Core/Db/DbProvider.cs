@@ -1,3 +1,3 @@
 namespace Manifesta.Core;
 
-public enum DbProvider { SqlServer, MySql, Postgres }
+public enum DbProvider { SqlServer, MySql, Postgres, Sqlite }

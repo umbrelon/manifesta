@@ -10,7 +10,8 @@
     <ProjectReference Include="..\Manifesta.Core\Manifesta.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="MySqlConnector" Version="2.3.7" />
-    <PackageReference Include="Npgsql"         Version="9.0.2" />
+    <PackageReference Include="MySqlConnector"      Version="2.3.7" />
+    <PackageReference Include="Npgsql"              Version="9.0.2" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.5" />
   </ItemGroup>
 </Project>
