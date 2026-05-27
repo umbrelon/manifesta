@@ -771,6 +771,47 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
+    public async Task InitSql_FileWithIntraFileDuplicates_IsSkippedWithWarning_OtherTablesStillWritten()
+    {
+        if (BinPath is null) return;
+        var tmp    = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        var sqlDir = Path.Combine(tmp, "ddl");
+        Directory.CreateDirectory(sqlDir);
+        try
+        {
+            // Conditional DDL pattern: two CREATE TABLE for the same name in one file.
+            await File.WriteAllTextAsync(Path.Combine(sqlDir, "conditional.sql"), """
+                -- variant without identity
+                CREATE TABLE Widget (Id INT NOT NULL PRIMARY KEY);
+                -- variant with identity
+                CREATE TABLE Widget (Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY);
+                """);
+
+            // A clean file — should still be processed despite the bad file.
+            await File.WriteAllTextAsync(Path.Combine(sqlDir, "clean.sql"),
+                "CREATE TABLE Gadget (Id INT NOT NULL PRIMARY KEY);");
+
+            var outDir = Path.Combine(tmp, "out");
+            var (code, stdout, stderr) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",      sqlDir,
+                "--output-dir", outDir,
+                "--provider",   "mysql");
+
+            // Non-zero because a file was skipped.
+            code.Should().Be(1);
+            // Only the clean table should be written — Widget was skipped along with its file.
+            Directory.GetFiles(outDir, "*.json").Should().HaveCount(1);
+            Path.GetFileName(Directory.GetFiles(outDir, "*.json")[0]).Should().Contain("Gadget");
+            // Warning appears on stderr mentioning the offending file.
+            stderr.Should().Contain("Warning");
+            stderr.Should().Contain("conditional.sql");
+            stderr.Should().Contain("Widget");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
     public async Task InitSql_NoMatchingPattern_ExitsWithError()
     {
         if (BinPath is null) return;
@@ -992,5 +1033,158 @@ public sealed class CliSmokeTests
             File.WriteAllText(Path.Combine(tbl, name), json);
 
         return root;
+    }
+
+    // ── init sql --default-schema ────────────────────────────────────────────
+
+    [Fact]
+    public async Task InitSql_DefaultSchema_PrefixesUnqualifiedTables()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        var sqlDir = Path.Combine(tmp, "ddl");
+        Directory.CreateDirectory(sqlDir);
+        try
+        {
+            // Unqualified table — should receive the default schema prefix.
+            await File.WriteAllTextAsync(Path.Combine(sqlDir, "t.sql"),
+                "CREATE TABLE Widget (Id INT NOT NULL PRIMARY KEY);");
+
+            var outDir = Path.Combine(tmp, "out");
+            var (code, _, _) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",          sqlDir,
+                "--output-dir",     outDir,
+                "--provider",       "sqlserver",
+                "--default-schema", "dbo");
+
+            code.Should().Be(0);
+            Directory.GetFiles(outDir, "*.json").Should().ContainSingle()
+                .Which.Should().EndWith("dbo.Widget.json");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_DefaultSchema_ExplicitSchemaInDdlTakesPrecedence()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        var sqlDir = Path.Combine(tmp, "ddl");
+        Directory.CreateDirectory(sqlDir);
+        try
+        {
+            // Table has explicit [other].[Widget] — default-schema must not override it.
+            await File.WriteAllTextAsync(Path.Combine(sqlDir, "t.sql"),
+                "CREATE TABLE [other].[Widget] (Id INT NOT NULL PRIMARY KEY);");
+
+            var outDir = Path.Combine(tmp, "out");
+            var (code, _, _) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",          sqlDir,
+                "--output-dir",     outDir,
+                "--provider",       "sqlserver",
+                "--default-schema", "dbo");
+
+            code.Should().Be(0);
+            Directory.GetFiles(outDir, "*.json").Should().ContainSingle()
+                .Which.Should().EndWith("other.Widget.json");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_SchemaFlags_IgnoredForMySql()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        var sqlDir = Path.Combine(tmp, "ddl");
+        Directory.CreateDirectory(sqlDir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(sqlDir, "t.sql"),
+                "CREATE TABLE Widget (Id INT NOT NULL PRIMARY KEY);");
+
+            var outDir = Path.Combine(tmp, "out");
+            var (code, _, _) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",          sqlDir,
+                "--output-dir",     outDir,
+                "--provider",       "mysql",
+                "--default-schema", "dbo",
+                "--schema",         "dbo");
+
+            code.Should().Be(0);
+            // MySQL has no schema namespace — --default-schema and --schema are both ignored.
+            // Output should be plain Widget.json, not dbo.Widget.json, and not filtered away.
+            var file = Directory.GetFiles(outDir, "*.json").Should().ContainSingle().Which;
+            file.Should().EndWith("Widget.json");
+            file.Should().NotEndWith("dbo.Widget.json");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_SchemaFilter_OnlyIncludesMatchingTables()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        var sqlDir = Path.Combine(tmp, "ddl");
+        Directory.CreateDirectory(sqlDir);
+        try
+        {
+            // Two tables in different schemas in a single file.
+            await File.WriteAllTextAsync(Path.Combine(sqlDir, "t.sql"), """
+                CREATE TABLE [dbo].[Widget] (Id INT NOT NULL PRIMARY KEY);
+                CREATE TABLE [app].[Config] (Id INT NOT NULL PRIMARY KEY);
+                """);
+
+            var outDir = Path.Combine(tmp, "out");
+            var (code, _, _) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",      sqlDir,
+                "--output-dir", outDir,
+                "--provider",   "sqlserver",
+                "--schema",     "dbo");
+
+            code.Should().Be(0);
+            // Only the dbo table should be written; app.Config is filtered out.
+            Directory.GetFiles(outDir, "*.json").Should().ContainSingle()
+                .Which.Should().EndWith("dbo.Widget.json");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_DefaultSchemaAndSchemaFilter_WorkTogether()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        var sqlDir = Path.Combine(tmp, "ddl");
+        Directory.CreateDirectory(sqlDir);
+        try
+        {
+            // One unqualified (gets dbo. from --default-schema) and one explicit app.Config.
+            await File.WriteAllTextAsync(Path.Combine(sqlDir, "t.sql"), """
+                CREATE TABLE Widget (Id INT NOT NULL PRIMARY KEY);
+                CREATE TABLE [app].[Config] (Id INT NOT NULL PRIMARY KEY);
+                """);
+
+            var outDir = Path.Combine(tmp, "out");
+            var (code, _, _) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",          sqlDir,
+                "--output-dir",     outDir,
+                "--provider",       "sqlserver",
+                "--default-schema", "dbo",
+                "--schema",         "dbo");
+
+            code.Should().Be(0);
+            // Widget gets prefixed to dbo.Widget, then passes the dbo filter.
+            // app.Config is filtered out.
+            Directory.GetFiles(outDir, "*.json").Should().ContainSingle()
+                .Which.Should().EndWith("dbo.Widget.json");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
     }
 }

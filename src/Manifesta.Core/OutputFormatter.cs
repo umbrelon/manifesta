@@ -57,6 +57,13 @@ public static class OutputFormatter
     public static void WriteVerbose(string message, GlobalOptions options, TextWriter? writer = null)
         => WriteVerbose(message, options.Verbose, writer);
 
+    /// <summary>
+    /// Writes a warning to stderr.  Always shown — not suppressed by quiet mode.
+    /// Use for recoverable issues where processing continues (e.g. a file was skipped).
+    /// </summary>
+    public static void WriteWarning(string message, TextWriter? writer = null)
+        => (writer ?? Console.Error).WriteLine($"Warning: {message}");
+
     /// <summary>Always writes to stderr (errors are never suppressed by quiet mode).</summary>
     public static void WriteError(string message, TextWriter? writer = null)
         => (writer ?? Console.Error).WriteLine($"Error: {message}");

@@ -1,24 +1,22 @@
-using Manifesta.Core;
 using Microsoft.Extensions.FileSystemGlobbing;
 
-namespace Manifesta.Cli;
+namespace Manifesta.Core;
 
 /// <summary>
 /// Shared helper that resolves a <c>--input</c> / <c>--ddl-file</c> argument to an
 /// ordered list of full file paths using glob-aware matching.
 ///
 /// <list type="bullet">
-///   <item>Single file — returned as-is; <paramref name="pattern"/> and
-///     <paramref name="recursive"/> are ignored.</item>
+///   <item>Single file — returned as-is; <c>pattern</c> and <c>recursive</c> are ignored.</item>
 ///   <item>Directory + plain filename pattern (no <c>/</c>, <c>\</c>, or <c>**</c>) —
-///     <paramref name="recursive"/> prepends <c>**/</c> to search all depths;
+///     <c>recursive</c> prepends <c>**/</c> to search all depths;
 ///     without it only the root is matched.</item>
 ///   <item>Directory + path glob (contains <c>/</c>, <c>\</c>, or <c>**</c>) —
 ///     matched directly via <see cref="Matcher"/>;
-///     <paramref name="recursive"/> is ignored with a verbose hint.</item>
+///     <c>recursive</c> is ignored with a verbose hint.</item>
 /// </list>
 /// </summary>
-internal static class SqlDdlFileCollector
+public static class SqlDdlFileCollector
 {
     /// <summary>
     /// Collects SQL files from <paramref name="inputPath"/>.
@@ -26,7 +24,7 @@ internal static class SqlDdlFileCollector
     /// Returns <c>null</c> after writing an error message on failure —
     /// the caller should propagate the appropriate exit code.
     /// </summary>
-    internal static List<string>? Collect(
+    public static List<string>? Collect(
         string        inputPath,
         string        pattern,
         bool          recursive,
