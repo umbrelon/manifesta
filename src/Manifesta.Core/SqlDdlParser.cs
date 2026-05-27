@@ -1157,6 +1157,12 @@ public sealed class SqlDdlParser
     {
         var lower = raw.Trim().ToLowerInvariant();
 
+        // sysname is a SQL Server system alias for nvarchar(128)
+        if (lower == "sysname") return "nvarchar(128)";
+
+        // integer is an alias for int in T-SQL
+        if (lower == "integer") return "int";
+
         // dec(...) is an alias for decimal(...) in T-SQL
         if (lower.StartsWith("dec(", StringComparison.Ordinal))
             lower = "decimal" + lower[3..];

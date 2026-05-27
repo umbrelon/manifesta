@@ -1143,6 +1143,35 @@ public sealed class SqlDdlParserTests
         r.PkAdditions[0].Columns.Should().ContainSingle().Which.Should().Be("Id");
     }
 
+    [Fact]
+    public void SqlServer_SysnameNormalisedToNvarchar128()
+    {
+        const string sql = """
+            CREATE TABLE [dbo].[SysObjects] (
+                [TableName] [sysname] NOT NULL,
+                [SchemaId]  [int]     NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Tables[0].Fields[0].Type.Should().Be("nvarchar(128)");
+    }
+
+    [Fact]
+    public void SqlServer_IntegerNormalisedToInt()
+    {
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [Id]    [integer] NOT NULL,
+                [Value] [bigint]  NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Tables[0].Fields[0].Type.Should().Be("int");
+        r.Tables[0].Fields[1].Type.Should().Be("bigint");
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // TOKENIZER
     // ═══════════════════════════════════════════════════════════════════════════
