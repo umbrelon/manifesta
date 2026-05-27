@@ -144,6 +144,10 @@ public sealed class InitSqlCommand : ManifestCommandBase
         var parser        = new SqlDdlParser();
         var allTables     = new List<TableDefinition>();
         var allErrors     = new List<string>();
+        // Collects ALTER TABLE … ADD CONSTRAINT … PRIMARY KEY additions from every file.
+        // Used below to backfill tables whose CREATE TABLE body omits the PK constraint
+        // (common in SQL Server database projects where PKs live in *_Updates.sql files).
+        var allPkAdditions = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
         int filesWithDups = 0;
 
         foreach (var file in sqlFiles)
@@ -162,6 +166,10 @@ public sealed class InitSqlCommand : ManifestCommandBase
             foreach (var err in result.Errors)
                 OutputFormatter.WriteError($"[{Path.GetFileName(file)}] {err}");
             allErrors.AddRange(result.Errors);
+
+            // Accumulate PK additions (last writer wins if multiple files set the same table's PK).
+            foreach (var pk in result.PkAdditions)
+                allPkAdditions[pk.TableName] = pk.Columns;
 
             // Skip files where the same table name appears more than once
             // (typical cause: conditional migration scripts with two CREATE TABLE variants).
@@ -185,6 +193,20 @@ public sealed class InitSqlCommand : ManifestCommandBase
             }
 
             allTables.AddRange(result.Tables);
+        }
+
+        // ── Back-fill PRIMARY KEY from ALTER TABLE statements ─────────────────
+        // Tables in SQL Server database projects often have their PK defined in a
+        // separate *_Updates.sql file via ALTER TABLE … ADD CONSTRAINT … PRIMARY KEY.
+        // Apply those additions to any table that still has an empty PrimaryKey list.
+        if (allPkAdditions.Count > 0)
+        {
+            for (int idx = 0; idx < allTables.Count; idx++)
+            {
+                var t = allTables[idx];
+                if (t.PrimaryKey.Count == 0 && allPkAdditions.TryGetValue(t.Name, out var pkCols))
+                    allTables[idx] = t with { PrimaryKey = pkCols };
+            }
         }
 
         if (allTables.Count == 0)

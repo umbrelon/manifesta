@@ -24,7 +24,23 @@ public sealed class SqlDdlParser
 
     public sealed record ParseResult(
         IReadOnlyList<TableDefinition> Tables,
-        IReadOnlyList<string>          Errors);
+        IReadOnlyList<string>          Errors)
+    {
+        /// <summary>
+        /// Primary-key column lists extracted from <c>ALTER TABLE … ADD CONSTRAINT … PRIMARY KEY</c>
+        /// statements found in the same SQL text. The caller is responsible for applying these to
+        /// matching <see cref="Tables"/> entries that have an empty <see cref="TableDefinition.PrimaryKey"/>.
+        /// </summary>
+        public IReadOnlyList<AlterTablePkAddition> PkAdditions { get; init; } = [];
+    }
+
+    /// <summary>
+    /// Primary-key information extracted from an <c>ALTER TABLE … ADD CONSTRAINT … PRIMARY KEY</c>
+    /// statement.  Used to enrich tables whose CREATE TABLE body omits the PK constraint.
+    /// </summary>
+    public sealed record AlterTablePkAddition(
+        string TableName,
+        IReadOnlyList<string> Columns);
 
     /// <summary>
     /// Parses one or more CREATE TABLE statements from <paramref name="sql"/>.
@@ -48,7 +64,78 @@ public sealed class SqlDdlParser
             errors.AddRange(blockErrors);
         }
 
-        return new ParseResult(tables.AsReadOnly(), errors.AsReadOnly());
+        var pkAdditions = ExtractAlterTablePks(sql, schemaPrefix);
+        return new ParseResult(tables.AsReadOnly(), errors.AsReadOnly())
+        {
+            PkAdditions = pkAdditions.AsReadOnly(),
+        };
+    }
+
+    // ── Phase 0: extract ALTER TABLE … ADD CONSTRAINT … PRIMARY KEY ──────────
+
+    private static readonly Regex s_alterTableRx = new(
+        @"ALTER\s+TABLE\s+",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Scans <paramref name="sql"/> for <c>ALTER TABLE … ADD [CONSTRAINT name] PRIMARY KEY … (cols)</c>
+    /// statements and returns one <see cref="AlterTablePkAddition"/> per match.
+    /// Handles optional <c>IF NOT EXISTS (…)</c> guards and <c>CLUSTERED/NONCLUSTERED</c> keywords.
+    /// </summary>
+    private static List<AlterTablePkAddition> ExtractAlterTablePks(string sql, string? schemaPrefix)
+    {
+        var result = new List<AlterTablePkAddition>();
+        var clean  = RemoveComments(sql);
+        var tokens = Tokenize(clean);
+        int i = 0;
+
+        while (i < tokens.Count)
+        {
+            if (!tokens[i].Equals("ALTER", StringComparison.OrdinalIgnoreCase)) { i++; continue; }
+            if (i + 1 >= tokens.Count || !tokens[i + 1].Equals("TABLE", StringComparison.OrdinalIgnoreCase)) { i++; continue; }
+            i += 2; // consume ALTER TABLE
+
+            if (i >= tokens.Count) break;
+            var tableName = ReadQualifiedTableRef(tokens, ref i);
+            if (string.IsNullOrWhiteSpace(tableName)) continue;
+
+            // Apply schema prefix to unqualified names — same rule as CREATE TABLE
+            if (!tableName.Contains('.') && schemaPrefix is not null)
+                tableName = $"{schemaPrefix}.{tableName}";
+
+            // Must be followed by ADD
+            if (i >= tokens.Count || !tokens[i].Equals("ADD", StringComparison.OrdinalIgnoreCase)) continue;
+            i++;
+
+            // Optional CONSTRAINT <name>
+            if (i < tokens.Count && tokens[i].Equals("CONSTRAINT", StringComparison.OrdinalIgnoreCase))
+            {
+                i++; // skip CONSTRAINT
+                if (i < tokens.Count && !IsConstraintTypeKeyword(tokens[i]))
+                    i++; // skip constraint name
+            }
+
+            // Must have PRIMARY KEY
+            if (i >= tokens.Count || !tokens[i].Equals("PRIMARY", StringComparison.OrdinalIgnoreCase)) continue;
+            if (i + 1 >= tokens.Count || !tokens[i + 1].Equals("KEY", StringComparison.OrdinalIgnoreCase)) continue;
+            i += 2; // consume PRIMARY KEY
+
+            // Optional CLUSTERED / NONCLUSTERED
+            if (i < tokens.Count &&
+                (tokens[i].Equals("CLUSTERED",    StringComparison.OrdinalIgnoreCase) ||
+                 tokens[i].Equals("NONCLUSTERED", StringComparison.OrdinalIgnoreCase)))
+                i++;
+
+            // Column list
+            if (i < tokens.Count && tokens[i].StartsWith('('))
+            {
+                var cols = ParseColumnList(tokens[i++]);
+                if (cols.Count > 0)
+                    result.Add(new AlterTablePkAddition(tableName, cols.AsReadOnly()));
+            }
+        }
+
+        return result;
     }
 
     // ── Phase 1: extract CREATE TABLE blocks ──────────────────────────────────
@@ -1061,8 +1148,24 @@ public sealed class SqlDdlParser
             var other => other,
         };
 
-    private static string NormalizeSqlServer(string raw) =>
-        raw.ToLowerInvariant();
+    // Matches precision/scale groups, e.g. "(18, 0)" or "( 10 , 2 )" — strips inner spaces.
+    private static readonly Regex s_precisionSpacingRx = new(
+        @"\(\s*(\d+)\s*,\s*(\d+)\s*\)",
+        RegexOptions.Compiled);
+
+    private static string NormalizeSqlServer(string raw)
+    {
+        var lower = raw.Trim().ToLowerInvariant();
+
+        // dec(...) is an alias for decimal(...) in T-SQL
+        if (lower.StartsWith("dec(", StringComparison.Ordinal))
+            lower = "decimal" + lower[3..];
+
+        // Remove spaces inside precision/scale parentheses: decimal(18, 0) → decimal(18,0)
+        lower = s_precisionSpacingRx.Replace(lower, "($1,$2)");
+
+        return lower;
+    }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -1206,13 +1309,29 @@ public sealed class SqlDdlParser
         (char.IsLetter(token[0]) || token[0] == '_' ||
          token[0] == '`' || token[0] == '"' || token[0] == '[');
 
-    /// <summary>Keywords that legally follow a REFERENCES table name directly.</summary>
+    /// <summary>
+    /// Keywords that legally follow a table-name token in any context where
+    /// <see cref="ReadQualifiedTableRef"/> is used (REFERENCES clause, ALTER TABLE, etc.)
+    /// and therefore must NOT be consumed as the second half of a schema.table pair.
+    /// </summary>
     private static bool IsReferencesFollowKeyword(string token) =>
+        // REFERENCES clause terminators
         token.Equals("ON",         StringComparison.OrdinalIgnoreCase) ||
         token.Equals("NOT",        StringComparison.OrdinalIgnoreCase) ||
         token.Equals("MATCH",      StringComparison.OrdinalIgnoreCase) ||
         token.Equals("DEFERRABLE", StringComparison.OrdinalIgnoreCase) ||
-        token.Equals("INITIALLY",  StringComparison.OrdinalIgnoreCase);
+        token.Equals("INITIALLY",  StringComparison.OrdinalIgnoreCase) ||
+        // ALTER TABLE action keywords — must not be confused with a table-name component
+        token.Equals("ADD",        StringComparison.OrdinalIgnoreCase) ||
+        token.Equals("DROP",       StringComparison.OrdinalIgnoreCase) ||
+        token.Equals("ALTER",      StringComparison.OrdinalIgnoreCase) ||
+        token.Equals("WITH",       StringComparison.OrdinalIgnoreCase) ||
+        token.Equals("SET",        StringComparison.OrdinalIgnoreCase) ||
+        token.Equals("NOCHECK",    StringComparison.OrdinalIgnoreCase) ||
+        token.Equals("ENABLE",     StringComparison.OrdinalIgnoreCase) ||
+        token.Equals("DISABLE",    StringComparison.OrdinalIgnoreCase) ||
+        // Batch separator (SQL Server)
+        token.Equals("GO",         StringComparison.OrdinalIgnoreCase);
 
     private static string Truncate(string s) =>
         s.Length > 80 ? s[..77] + "..." : s;

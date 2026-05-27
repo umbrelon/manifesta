@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Manifesta.Core.IR;
 
 namespace Manifesta.Core.Merge;
@@ -10,6 +11,45 @@ internal static class FieldComparison
 {
     internal static readonly StringComparer NameComparer = StringComparer.OrdinalIgnoreCase;
 
+    // Matches a single outer pair of parentheses wrapping the entire value, e.g. (-1) or (0).
+    private static readonly Regex s_outerParensRx = new(
+        @"^\(([^()]*)\)$",
+        RegexOptions.Compiled);
+
+    // Matches precision/scale groups with inner spaces, e.g. decimal(18, 0).
+    private static readonly Regex s_precisionSpaceRx = new(
+        @"\(\s*(\d+)\s*,\s*(\d+)\s*\)",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Normalises a SQL type string for comparison so that purely formatting
+    /// differences (e.g. <c>decimal(18, 0)</c> vs <c>decimal(18,0)</c>, or
+    /// <c>dec</c> vs <c>decimal</c>) do not produce false drift.
+    /// </summary>
+    internal static string? NormalizeTypeForComparison(string? type)
+    {
+        if (type is null) return null;
+        var s = type.Trim().ToLowerInvariant();
+        // dec(...) → decimal(...)
+        if (s.StartsWith("dec(", StringComparison.Ordinal))
+            s = "decimal" + s[3..];
+        // Remove spaces inside precision/scale: decimal(18, 0) → decimal(18,0)
+        s = s_precisionSpaceRx.Replace(s, "($1,$2)");
+        return s;
+    }
+
+    /// <summary>
+    /// Normalises a SQL default value string for comparison so that SQL Server's
+    /// habit of wrapping defaults in an extra pair of parentheses (e.g. <c>(-1)</c>
+    /// vs <c>-1</c>) does not produce false drift.
+    /// </summary>
+    internal static string? NormalizeDefaultForComparison(string? value)
+    {
+        if (value is null) return null;
+        var m = s_outerParensRx.Match(value.Trim());
+        return m.Success ? m.Groups[1].Value : value;
+    }
+
     /// <summary>
     /// Returns a <see cref="FieldChange"/> for every DB-authoritative property of
     /// <paramref name="repo"/> that differs from <paramref name="live"/>.
@@ -19,7 +59,9 @@ internal static class FieldComparison
     {
         var changes = new List<FieldChange>();
 
-        if (!string.Equals(repo.Type, live.Type, StringComparison.OrdinalIgnoreCase))
+        var repoType = NormalizeTypeForComparison(repo.Type);
+        var liveType = NormalizeTypeForComparison(live.Type);
+        if (!string.Equals(repoType, liveType, StringComparison.OrdinalIgnoreCase))
             changes.Add(new FieldChange
             {
                 Kind      = FieldChangeKind.TypeChanged,
@@ -37,7 +79,9 @@ internal static class FieldComparison
                 NewValue  = live.Nullable.ToString().ToLowerInvariant(),
             });
 
-        if (!string.Equals(repo.Default, live.Default, StringComparison.Ordinal))
+        var repoDefault = NormalizeDefaultForComparison(repo.Default);
+        var liveDefault = NormalizeDefaultForComparison(live.Default);
+        if (!string.Equals(repoDefault, liveDefault, StringComparison.OrdinalIgnoreCase))
             changes.Add(new FieldChange
             {
                 Kind      = FieldChangeKind.DefaultChanged,

@@ -1019,6 +1019,131 @@ public sealed class SqlDdlParserTests
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // SQL SERVER — decimal / dec type normalisation
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void SqlServer_DecimalPrecisionSpaces_NormalisedToNoSpaces()
+    {
+        // SQL Server sometimes stores types as "decimal(18, 0)" with a space after the comma.
+        // The parser should normalise to "decimal(18,0)" to avoid spurious drift reports.
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [Amount] [decimal](18, 0) NOT NULL,
+                [Rate]   [decimal](10, 4) NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Tables[0].Fields[0].Type.Should().Be("decimal(18,0)");
+        r.Tables[0].Fields[1].Type.Should().Be("decimal(10,4)");
+    }
+
+    [Fact]
+    public void SqlServer_DecAliasNormalisedToDecimal()
+    {
+        // DEC is a standard alias for DECIMAL in T-SQL.
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [Amount] [dec](18, 2) NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Tables[0].Fields[0].Type.Should().Be("decimal(18,2)");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SQL SERVER — ALTER TABLE … ADD CONSTRAINT … PRIMARY KEY extraction
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void SqlServer_AlterTablePk_NoPkInCreateTable_PkAdditionExtracted()
+    {
+        // SQL Server database projects often have PKs in separate *_Updates.sql files.
+        const string sql = """
+            ALTER TABLE [dbo].[AccessType] ADD CONSTRAINT [PK_AccessType] PRIMARY KEY CLUSTERED ([Id] ASC);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.PkAdditions.Should().ContainSingle();
+        r.PkAdditions[0].TableName.Should().Be("dbo.AccessType");
+        r.PkAdditions[0].Columns.Should().ContainSingle().Which.Should().Be("Id");
+    }
+
+    [Fact]
+    public void SqlServer_AlterTablePk_NoConstraintKeyword_PkAdditionExtracted()
+    {
+        // CONSTRAINT clause is optional.
+        const string sql = """
+            ALTER TABLE [dbo].[t] ADD PRIMARY KEY ([Id]);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.PkAdditions.Should().ContainSingle();
+        r.PkAdditions[0].TableName.Should().Be("dbo.t");
+        r.PkAdditions[0].Columns.Should().ContainSingle().Which.Should().Be("Id");
+    }
+
+    [Fact]
+    public void SqlServer_AlterTablePk_CompositePk_AllColumnsExtracted()
+    {
+        const string sql = """
+            ALTER TABLE [dbo].[OrderItem] ADD CONSTRAINT [PK_OrderItem] PRIMARY KEY ([OrderId], [LineNo]);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.PkAdditions.Should().ContainSingle();
+        r.PkAdditions[0].Columns.Should().BeEquivalentTo(["OrderId", "LineNo"], o => o.WithStrictOrdering());
+    }
+
+    [Fact]
+    public void SqlServer_AlterTablePk_UnqualifiedTableName_SchemaPrefixApplied()
+    {
+        // When schemaPrefix = "dbo", unqualified names should get the prefix.
+        const string sql = """
+            ALTER TABLE AccessType ADD CONSTRAINT PK_AccessType PRIMARY KEY (Id);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, schemaPrefix: "dbo");
+        r.PkAdditions.Should().ContainSingle();
+        r.PkAdditions[0].TableName.Should().Be("dbo.AccessType");
+    }
+
+    [Fact]
+    public void SqlServer_AlterTablePk_NonPkAlter_NotAddedToPkAdditions()
+    {
+        // ALTER TABLE ADD CONSTRAINT … FOREIGN KEY should not produce a PkAddition.
+        const string sql = """
+            ALTER TABLE [dbo].[order_item] ADD CONSTRAINT [fk_oi_order]
+                FOREIGN KEY ([order_id]) REFERENCES [dbo].[order_header] ([id]);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.PkAdditions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void SqlServer_AlterTablePk_MixedWithCreateTable_BothExtracted()
+    {
+        // A typical *_Updates.sql file: one CREATE TABLE + one ALTER TABLE PK.
+        const string sql = """
+            CREATE TABLE [dbo].[Widget] (
+                [Id]   [int]          NOT NULL,
+                [Name] [nvarchar](50) NOT NULL
+            );
+
+            ALTER TABLE [dbo].[Widget] ADD CONSTRAINT [PK_Widget] PRIMARY KEY ([Id]);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Tables.Should().ContainSingle().Which.Name.Should().Be("dbo.Widget");
+        r.PkAdditions.Should().ContainSingle();
+        r.PkAdditions[0].TableName.Should().Be("dbo.Widget");
+        r.PkAdditions[0].Columns.Should().ContainSingle().Which.Should().Be("Id");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // TOKENIZER
     // ═══════════════════════════════════════════════════════════════════════════
 

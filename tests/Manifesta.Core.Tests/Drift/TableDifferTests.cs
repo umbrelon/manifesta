@@ -623,4 +623,117 @@ public class TableDifferTests
 
         result.IndexChanges.Should().BeEmpty();
     }
+
+    // ── Normalisation: precision spacing — not drift ──────────────────────────
+
+    [Fact]
+    public void Diff_DecimalPrecisionSpacing_NoDrift()
+    {
+        // "decimal(18, 0)" (DDL) vs "decimal(18,0)" (DB) — formatting only, not drift.
+        var repo = Table(fields: [Field("Amount", "decimal(18, 0)")]);
+        var live = Table(fields: [Field("Amount", "decimal(18,0)")]);
+
+        var result = _differ.Diff(repo, live, RepoPath);
+
+        result.HasDrift.Should().BeFalse();
+        result.FieldChanges.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Diff_DecimalPrecisionSpacingWithExtraWhitespace_NoDrift()
+    {
+        // Extra spaces around both digits, e.g. "decimal( 18 , 0 )".
+        var repo = Table(fields: [Field("Rate", "decimal( 18 , 4 )")]);
+        var live = Table(fields: [Field("Rate", "decimal(18,4)")]);
+
+        var result = _differ.Diff(repo, live, RepoPath);
+
+        result.HasDrift.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Diff_DecAliasVsDecimal_NoDrift()
+    {
+        // "dec(18,2)" is a standard T-SQL alias for "decimal(18,2)".
+        var repo = Table(fields: [Field("Amount", "dec(18,2)")]);
+        var live = Table(fields: [Field("Amount", "decimal(18,2)")]);
+
+        var result = _differ.Diff(repo, live, RepoPath);
+
+        result.HasDrift.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Diff_DifferentDecimalPrecision_RecordedAsDrift()
+    {
+        // decimal(18,0) vs decimal(10,0) — a genuine type change.
+        var repo = Table(fields: [Field("Amount", "decimal(18,0)")]);
+        var live = Table(fields: [Field("Amount", "decimal(10,0)")]);
+
+        var result = _differ.Diff(repo, live, RepoPath);
+
+        result.HasDrift.Should().BeTrue();
+        result.FieldChanges.Should().ContainSingle(c => c.Kind == FieldChangeKind.TypeChanged);
+        // OldValue/NewValue carry the *original* (un-normalised) strings.
+        result.FieldChanges[0].OldValue.Should().Be("decimal(18,0)");
+        result.FieldChanges[0].NewValue.Should().Be("decimal(10,0)");
+    }
+
+    // ── Normalisation: SQL Server outer-paren defaults — not drift ────────────
+
+    [Fact]
+    public void Diff_DefaultWrappedInParens_NoDrift()
+    {
+        // SQL Server wraps defaults in an extra pair of parens in sys.columns,
+        // e.g. "(-1)" from DB vs "-1" from DDL-extracted JSON.
+        var repo = Table(fields: [Field("StatusId", "int", defaultVal: "-1")]);
+        var live = Table(fields: [Field("StatusId", "int", defaultVal: "(-1)")]);
+
+        var result = _differ.Diff(repo, live, RepoPath);
+
+        result.HasDrift.Should().BeFalse();
+        result.FieldChanges.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Diff_DefaultWrappedInParens_NullableContent_NoDrift()
+    {
+        // (NULL) from DB vs NULL from DDL.
+        var repo = Table(fields: [Field("Notes", "nvarchar(200)", defaultVal: "NULL")]);
+        var live = Table(fields: [Field("Notes", "nvarchar(200)", defaultVal: "(NULL)")]);
+
+        var result = _differ.Diff(repo, live, RepoPath);
+
+        result.HasDrift.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Diff_DefaultWithNestedParens_StillRecordedAsDrift()
+    {
+        // Defaults with nested parens like "(getutcdate())" — the outer pair is stripped,
+        // leaving "getutcdate()" vs "0"; that is a real difference.
+        var repo = Table(fields: [Field("CreatedAt", "datetime2", defaultVal: "0")]);
+        var live = Table(fields: [Field("CreatedAt", "datetime2", defaultVal: "(getutcdate())")]);
+
+        var result = _differ.Diff(repo, live, RepoPath);
+
+        result.HasDrift.Should().BeTrue();
+        result.FieldChanges.Should().ContainSingle(c => c.Kind == FieldChangeKind.DefaultChanged);
+        // Original values preserved in the report.
+        result.FieldChanges[0].OldValue.Should().Be("0");
+        result.FieldChanges[0].NewValue.Should().Be("(getutcdate())");
+    }
+
+    [Fact]
+    public void Diff_TrulyDifferentDefaults_RecordedAsDrift()
+    {
+        // Genuine change: "(0)" vs "(1)" → normalises to "0" vs "1" → drift.
+        var repo = Table(fields: [Field("IsActive", "bit", defaultVal: "(0)")]);
+        var live = Table(fields: [Field("IsActive", "bit", defaultVal: "(1)")]);
+
+        var result = _differ.Diff(repo, live, RepoPath);
+
+        result.HasDrift.Should().BeTrue();
+        result.FieldChanges.Should().ContainSingle(c => c.Kind == FieldChangeKind.DefaultChanged);
+    }
 }
