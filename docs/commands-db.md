@@ -135,6 +135,9 @@ manifesta db drift --connection "..." --output-dir ./reports
 | `--pattern` | No | `*.sql` | Glob pattern for file matching when `--ddl-file` is a directory. Plain filename patterns (e.g. `*_up.sql`) are controlled by `--recursive`. Path globs (e.g. `2024/**/*.sql`) are matched directly. |
 | `--strict` | No | false | Exit 1 on warnings (extra columns or tables in DB not present in the registry) |
 | `--include-schema` | No | false | Embed full before/after field listings for each drifted table in the report |
+| `--no-fk-drifts` | No | false | Suppress FK change rows from the per-table drift sections |
+| `--no-index-drifts` | No | false | Suppress index change rows from the per-table drift sections |
+| `--no-clean-tables` | No | false | Suppress the clean-tables reference list from the report |
 | `--output` | No | — | Full path for the drift report file |
 | `--output-dir` | No | `.` | Directory for the drift report file |
 
@@ -212,11 +215,12 @@ Logical and virtual FKs are always ignored — they are repo-sovereign and have 
 `db drift` writes a `drift-report.md` file to the output directory. The report contains:
 
 - A status banner: ✅ **In sync**, ⚠️ **Warnings**, or ❌ **Drift detected**
-- A summary counts table
-- Per-table change tables listing field, FK, and PK changes
-- A section for tables in the registry absent from the DB
-- A section for extra tables in the DB not tracked in the registry
-- A clean-table reference list (with `--include-schema`, each table's full field listing is added)
+- A summary counts table (tables scanned, in sync, drifted, absent; FK change total; index change total)
+- Per-table change tables listing field, PK, FK, and index changes
+- A section for tables in the registry absent from the source
+- A section for extra tables in the source not tracked in the registry
+- A clean-table reference list (suppressed with `--no-clean-tables`)
+- With `--include-schema`: full before/after field listings labelled **Repository definition** and **Source definition**
 
 ---
 

@@ -12,7 +12,7 @@ namespace Manifesta.Core.Drift;
 public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
 {
     public string Generate(DriftSession session) =>
-        Generate(session, sourceLabel: "Repository", targetLabel: "Live Database");
+        Generate(session, sourceLabel: "Repository", targetLabel: "Source");
 
     public string Generate(
         DriftSession session,
@@ -26,13 +26,16 @@ public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
         sb.AppendLine();
         sb.AppendLine($"Generated: {session.Timestamp:O}");
         sb.AppendLine($"Source: {session.Source}");
-        sb.AppendLine($"Root: {session.RootPath}");
+        sb.AppendLine($"Repository: {session.RootPath}");
         sb.AppendLine();
 
         // ── Summary ──────────────────────────────────────────────────────────────
         var statusLabel = session.HasDrift    ? "❌ Drift detected"
                         : session.HasWarnings ? "⚠ Warnings only"
                         :                       "✅ In sync";
+
+        var totalFkChanges    = session.DriftedTables.Sum(t => t.FkChanges.Count);
+        var totalIndexChanges = session.DriftedTables.Sum(t => t.IndexChanges.Count);
 
         sb.AppendLine("## Summary");
         sb.AppendLine();
@@ -45,6 +48,8 @@ public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
         sb.AppendLine($"| Tables with drift | {session.DriftedTables.Count} |");
         sb.AppendLine($"| Tables absent from DB | {session.MissingDbTables.Count} |");
         sb.AppendLine($"| Tables absent from repo (⚠) | {session.ExtraDbTables.Count} |");
+        sb.AppendLine($"| FK changes | {totalFkChanges} |");
+        sb.AppendLine($"| Index changes | {totalIndexChanges} |");
         sb.AppendLine();
 
         // ── Drifted tables ───────────────────────────────────────────────────────
@@ -53,7 +58,7 @@ public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
             sb.AppendLine("## Drifted Tables");
             sb.AppendLine();
             foreach (var result in session.DriftedTables)
-                AppendDriftedTable(sb, result, session.IncludeSchema);
+                AppendDriftedTable(sb, result, session.IncludeSchema, session.IncludeFkDrifts, session.IncludeIndexDrifts, sourceLabel, targetLabel);
         }
 
         // ── Tables absent from target ────────────────────────────────────────────
@@ -85,7 +90,7 @@ public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
         }
 
         // ── Clean tables (reference) ─────────────────────────────────────────────
-        if (session.CleanTables.Count > 0)
+        if (session.IncludeCleanTables && session.CleanTables.Count > 0)
         {
             sb.AppendLine("## Clean Tables");
             sb.AppendLine();
@@ -101,15 +106,24 @@ public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
 
     // ── Per-table rendering ───────────────────────────────────────────────────
 
-    private static void AppendDriftedTable(StringBuilder sb, DriftResult result, bool includeSchema)
+    private static void AppendDriftedTable(
+        StringBuilder sb,
+        DriftResult   result,
+        bool          includeSchema,
+        bool          includeFkDrifts,
+        bool          includeIndexDrifts,
+        string        sourceLabel,
+        string        targetLabel)
     {
         sb.AppendLine($"### {result.TableName}");
         sb.AppendLine();
         sb.AppendLine($"**File:** `{result.RepoFilePath}`");
         sb.AppendLine();
 
-        if (result.HasDrift)
-            DbChangeTableHelper.Append(sb, result.PrimaryKeyChange, result.FieldChanges, result.FkChanges, dbSource: true);
+        var effectiveFks = includeFkDrifts ? result.FkChanges : (IReadOnlyList<FkChange>)[];
+        var hasStructuralChanges = result.FieldChanges.Count > 0 || result.PrimaryKeyChange is not null || effectiveFks.Count > 0;
+        if (hasStructuralChanges)
+            DbChangeTableHelper.Append(sb, result.PrimaryKeyChange, result.FieldChanges, effectiveFks, dbSource: true);
 
         if (result.HasWarnings)
         {
@@ -144,7 +158,7 @@ public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
             sb.AppendLine();
         }
 
-        if (result.IndexChanges.Count > 0)
+        if (includeIndexDrifts && result.IndexChanges.Count > 0)
         {
             sb.AppendLine($"**Index drift ({result.IndexChanges.Count} change(s)):**");
             sb.AppendLine();
@@ -154,11 +168,11 @@ public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
             {
                 var (label, details) = ic.Kind switch
                 {
-                    IndexChangeKind.Added            => ("Index added",            $"Columns: {ic.NewColumns}"),
-                    IndexChangeKind.Removed          => ("Index removed",          $"Columns: {ic.OldColumns}"),
-                    IndexChangeKind.ColumnsChanged   => ("Columns changed",        $"{ic.OldColumns} → {ic.NewColumns}"),
-                    IndexChangeKind.UniquenessChanged => ("Uniqueness changed",    $"unique: {ic.OldIsUnique} → {ic.NewIsUnique}"),
-                    _                                => ("Changed", "—"),
+                    IndexChangeKind.Added            => ("Index added",           $"Columns: {ic.NewColumns}"),
+                    IndexChangeKind.Removed          => ("Index removed",         $"Columns: {ic.OldColumns}"),
+                    IndexChangeKind.ColumnsChanged   => ("Columns changed",       $"{ic.OldColumns} → {ic.NewColumns}"),
+                    IndexChangeKind.UniquenessChanged => ("Uniqueness changed",   $"unique: {ic.OldIsUnique} → {ic.NewIsUnique}"),
+                    _                                => ("Changed",               "—"),
                 };
                 sb.AppendLine($"| {label} | `{ic.IndexName}` | {details} |");
             }
@@ -167,8 +181,8 @@ public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
 
         if (includeSchema)
         {
-            AppendSchemaTable(sb, "Repository definition", result.RepoTable.Fields);
-            AppendSchemaTable(sb, "Live database definition", result.LiveTable.Fields);
+            AppendSchemaTable(sb, $"{sourceLabel} definition", result.RepoTable.Fields);
+            AppendSchemaTable(sb, $"{targetLabel} definition", result.LiveTable.Fields);
         }
     }
 

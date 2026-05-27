@@ -130,9 +130,12 @@ public sealed class DbDriftCommand : ManifestCommandBase
         "Schema handling — meaning depends on mode: " +
         "with --connection/--input-dir: comma-separated schema filter (default: all, ignored for MySQL/SQLite); " +
         "with --ddl-file: prefix applied to unqualified table names (same as init sql --schema).");
-    private readonly Option<bool>    _strict        = new(["--strict"],         () => false, "Exit 1 on warnings (extra columns/tables in DB not in repo)");
-    private readonly Option<bool>    _includeSchema = new(["--include-schema"], () => false, "Embed full before/after field listings for drifted tables in the report");
-    private readonly Option<string?> _output        = new(["--output"],         () => null,  "Full output file path (overrides --output-dir)");
+    private readonly Option<bool>    _strict          = new(["--strict"],           () => false, "Exit 1 on warnings (extra columns/tables in DB not in repo)");
+    private readonly Option<bool>    _includeSchema   = new(["--include-schema"],   () => false, "Embed full before/after field listings for drifted tables in the report");
+    private readonly Option<bool>    _noFkDrifts      = new(["--no-fk-drifts"],      () => false, "Suppress FK change rows from the drift report");
+    private readonly Option<bool>    _noIndexDrifts   = new(["--no-index-drifts"],   () => false, "Suppress index change rows from the drift report");
+    private readonly Option<bool>    _noCleanTables   = new(["--no-clean-tables"],   () => false, "Suppress the clean-tables reference list from the drift report");
+    private readonly Option<string?> _output          = new(["--output"],            () => null,  "Full output file path (overrides --output-dir)");
     private readonly Option<string?> _outputDir     = new(["--output-dir"],     () => null,  "Output directory");
     private readonly Option<string>  _provider      = DbProviderHelper.ProviderOption;
     private readonly Option<bool>    _recursive     = new(["--recursive", "-r"], () => false,
@@ -152,6 +155,9 @@ public sealed class DbDriftCommand : ManifestCommandBase
         AddOption(_schema);
         AddOption(_strict);
         AddOption(_includeSchema);
+        AddOption(_noFkDrifts);
+        AddOption(_noIndexDrifts);
+        AddOption(_noCleanTables);
         AddOption(_output);
         AddOption(_outputDir);
         AddOption(_provider);
@@ -168,9 +174,12 @@ public sealed class DbDriftCommand : ManifestCommandBase
         var inputDir      = pr.GetValueForOption(_inputDir);
         var ddlFile       = pr.GetValueForOption(_ddlFile);
         var schema        = pr.GetValueForOption(_schema);
-        var strict        = pr.GetValueForOption(_strict);
-        var includeSchema = pr.GetValueForOption(_includeSchema);
-        var outputArg     = pr.GetValueForOption(_output);
+        var strict          = pr.GetValueForOption(_strict);
+        var includeSchema   = pr.GetValueForOption(_includeSchema);
+        var noFkDrifts      = pr.GetValueForOption(_noFkDrifts);
+        var noIndexDrifts   = pr.GetValueForOption(_noIndexDrifts);
+        var noCleanTables   = pr.GetValueForOption(_noCleanTables);
+        var outputArg       = pr.GetValueForOption(_output);
         var outputDir     = pr.GetValueForOption(_outputDir);
         var providerStr   = pr.GetValueForOption(_provider);
         var recursive     = pr.GetValueForOption(_recursive);
@@ -333,15 +342,18 @@ public sealed class DbDriftCommand : ManifestCommandBase
         // ── Assemble session ───────────────────────────────────────────────────
         var session = new DriftSession
         {
-            Source          = sourceDescription,
-            RootPath        = rootPath,
-            Timestamp       = DateTimeOffset.UtcNow,
-            TotalLiveTables = liveTables.Count,
-            IncludeSchema   = includeSchema,
-            DriftedTables   = drifted.AsReadOnly(),
-            CleanTables     = clean.AsReadOnly(),
-            ExtraDbTables   = extraDbTables.AsReadOnly(),
-            MissingDbTables = missingDbTables.AsReadOnly(),
+            Source             = sourceDescription,
+            RootPath           = rootPath,
+            Timestamp          = DateTimeOffset.UtcNow,
+            TotalLiveTables    = liveTables.Count,
+            IncludeSchema      = includeSchema,
+            IncludeFkDrifts    = !noFkDrifts,
+            IncludeIndexDrifts = !noIndexDrifts,
+            IncludeCleanTables = !noCleanTables,
+            DriftedTables      = drifted.AsReadOnly(),
+            CleanTables        = clean.AsReadOnly(),
+            ExtraDbTables      = extraDbTables.AsReadOnly(),
+            MissingDbTables    = missingDbTables.AsReadOnly(),
         };
 
         // ── Write report ───────────────────────────────────────────────────────

@@ -90,8 +90,11 @@ public sealed record DriftSession
     public required string         RootPath        { get; init; }
     public required DateTimeOffset Timestamp       { get; init; }
     public required int            TotalLiveTables { get; init; }
-    public required bool           IncludeSchema            { get; init; }
+    public required bool           IncludeSchema             { get; init; }
     public bool                    IncludeReferenceDataDrift { get; init; }
+    public bool                    IncludeFkDrifts           { get; init; } = true;
+    public bool                    IncludeIndexDrifts        { get; init; } = true;
+    public bool                    IncludeCleanTables        { get; init; } = true;
 
     /// <summary>Tables where the repo definition diverges from the live DB.</summary>
     public IReadOnlyList<DriftResult> DriftedTables  { get; init; } = [];

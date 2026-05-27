@@ -335,7 +335,7 @@ public class DriftReportGeneratorTests
 
         var report = _generator.Generate(session);
 
-        report.Should().Contain("## Tables Absent from Live Database");
+        report.Should().Contain("## Tables Absent from Source");
         report.Should().Contain("`/repo/tables/dbo.Ghost.json`");
         report.Should().Contain("db merge");
     }
@@ -345,7 +345,7 @@ public class DriftReportGeneratorTests
     {
         var report = _generator.Generate(EmptySession());
 
-        report.Should().NotContain("## Tables Absent from Live Database");
+        report.Should().NotContain("## Tables Absent from Source");
     }
 
     // ── Extra DB tables (warnings) ────────────────────────────────────────────
@@ -389,8 +389,8 @@ public class DriftReportGeneratorTests
         report.Should().Contain("## Tables Absent from Target");
         report.Should().Contain("## Warnings: Tables Absent from Source");
         report.Should().NotContain("db merge", "reconciliation hint must be omitted in compare mode");
-        report.Should().NotContain("Repository");
-        report.Should().NotContain("Live Database");
+        report.Should().NotContain("Tables Absent from Repository", "default source label must not appear in section headings");
+        report.Should().NotContain("Tables Absent from Live Database", "default target label must not appear in section headings");
     }
 
     // ── Clean tables section ──────────────────────────────────────────────────
@@ -442,7 +442,7 @@ public class DriftReportGeneratorTests
         var report = _generator.Generate(session);
 
         report.Should().NotContain("Repository definition");
-        report.Should().NotContain("Live database definition");
+        report.Should().NotContain("Source definition");
     }
 
     // ── Data drift rendering ──────────────────────────────────────────────────
@@ -525,7 +525,7 @@ public class DriftReportGeneratorTests
         var report = _generator.Generate(session);
 
         report.Should().Contain("**Repository definition:**");
-        report.Should().Contain("**Live database definition:**");
+        report.Should().Contain("**Source definition:**");
         report.Should().Contain("| Column | Type | Nullable | Default |");
     }
 
@@ -609,5 +609,169 @@ public class DriftReportGeneratorTests
 
         report.Should().Contain("| Column | Type | Nullable | Default | Expression |");
         report.Should().Contain("`([First]+' '+[Last])`");
+    }
+
+    // ── Summary FK / index counts ─────────────────────────────────────────────
+
+    [Fact]
+    public void Generate_SummaryAlwaysShowsFkAndIndexCounts()
+    {
+        var session = EmptySession() with
+        {
+            DriftedTables = [
+                DriftedResult("dbo.Order",
+                    fkChanges: [AddedFk("CustomerId"), RemovedFk("VendorId")]) with
+                {
+                    IndexChanges = [AddedIndex("IX_Status")],
+                },
+            ],
+        };
+
+        var report = _generator.Generate(session);
+
+        report.Should().Contain("| FK changes | 2 |");
+        report.Should().Contain("| Index changes | 1 |");
+    }
+
+    [Fact]
+    public void Generate_SummaryShowsZeroCountsWhenNoDriftedTables()
+    {
+        var session = EmptySession() with
+        {
+            CleanTables     = [CleanResult()],
+            TotalLiveTables = 1,
+        };
+
+        var report = _generator.Generate(session);
+
+        report.Should().Contain("| FK changes | 0 |");
+        report.Should().Contain("| Index changes | 0 |");
+    }
+
+    // ── --no-clean-tables ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void Generate_NoCleanTables_CleanSectionOmitted()
+    {
+        var session = EmptySession() with
+        {
+            CleanTables        = [CleanResult("dbo.Customer"), CleanResult("dbo.Product")],
+            TotalLiveTables    = 2,
+            IncludeCleanTables = false,
+        };
+
+        var report = _generator.Generate(session);
+
+        report.Should().NotContain("## Clean Tables");
+        report.Should().NotContain("dbo.Customer");
+    }
+
+    [Fact]
+    public void Generate_CleanTablesIncludedByDefault()
+    {
+        var session = EmptySession() with
+        {
+            CleanTables     = [CleanResult("dbo.Customer")],
+            TotalLiveTables = 1,
+        };
+
+        var report = _generator.Generate(session);
+
+        report.Should().Contain("## Clean Tables");
+        report.Should().Contain("dbo.Customer");
+    }
+
+    // ── Custom-label schema headings ──────────────────────────────────────────
+
+    [Fact]
+    public void Generate_CustomLabels_SchemaHeadingsUseLabels()
+    {
+        var repo = SimpleTable("dbo.Order", "Id");
+        var live = SimpleTable("dbo.Order", "Id", "Extra");
+        var session = EmptySession(includeSchema: true) with
+        {
+            DriftedTables = [DriftedResult("dbo.Order",
+                fieldChanges: [TypeChanged("Id")],
+                repoTable: repo, liveTable: live)],
+        };
+
+        var report = _generator.Generate(session, sourceLabel: "Source", targetLabel: "Target");
+
+        report.Should().Contain("**Source definition:**");
+        report.Should().Contain("**Target definition:**");
+        report.Should().NotContain("**Repository definition:**");
+    }
+
+    // ── --no-fk-drifts ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Generate_NoFkDrifts_FkRowsOmittedButColumnChangesPresent()
+    {
+        var session = EmptySession() with
+        {
+            DriftedTables = [DriftedResult(
+                fieldChanges: [TypeChanged("Amount")],
+                fkChanges:    [AddedFk("CustomerId")])],
+            IncludeFkDrifts = false,
+        };
+
+        var report = _generator.Generate(session);
+
+        report.Should().Contain("Column type changed");
+        report.Should().NotContain("FK added to DB");
+        report.Should().NotContain("`CustomerId`");
+    }
+
+    [Fact]
+    public void Generate_NoFkDrifts_FkOnlyTable_ChangeTableOmitted()
+    {
+        var session = EmptySession() with
+        {
+            DriftedTables   = [DriftedResult(fkChanges: [AddedFk("CustomerId")])],
+            IncludeFkDrifts = false,
+        };
+
+        var report = _generator.Generate(session);
+
+        report.Should().NotContain("| Change | Field / Key | Before | After |");
+    }
+
+    // ── --no-index-drifts ─────────────────────────────────────────────────────
+
+    private static IndexChange AddedIndex(string name) => new()
+    {
+        Kind       = IndexChangeKind.Added,
+        IndexName  = name,
+        NewColumns = "Col1",
+    };
+
+    [Fact]
+    public void Generate_IndexDrift_RenderedByDefault()
+    {
+        var session = EmptySession() with
+        {
+            DriftedTables = [DriftedResult() with { IndexChanges = [AddedIndex("IX_Order_Status")] }],
+        };
+
+        var report = _generator.Generate(session);
+
+        report.Should().Contain("**Index drift (1 change(s)):**");
+        report.Should().Contain("`IX_Order_Status`");
+        report.Should().Contain("Index added");
+    }
+
+    [Fact]
+    public void Generate_NoIndexDrifts_IndexSectionOmitted()
+    {
+        var session = EmptySession() with
+        {
+            DriftedTables      = [DriftedResult() with { IndexChanges = [AddedIndex("IX_Order_Status")] }],
+            IncludeIndexDrifts = false,
+        };
+
+        var report = _generator.Generate(session);
+
+        report.Should().NotContain("Index drift");
+        report.Should().NotContain("`IX_Order_Status`");
     }
 }
