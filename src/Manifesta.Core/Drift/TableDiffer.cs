@@ -12,7 +12,7 @@ namespace Manifesta.Core.Drift;
 /// Drift rules
 /// ───────────
 /// Detected as drift (❌):
-///   Column removed from DB, column type/nullability/default changed,
+///   Column absent from source, column type/nullability/default changed,
 ///   primary key changed, physical FK added or removed, physical FK cascadeDelete changed.
 ///
 /// Detected as warning only (⚠):
@@ -24,9 +24,9 @@ namespace Manifesta.Core.Drift;
 /// </remarks>
 public sealed class TableDiffer
 {
-    public DriftResult Diff(TableDefinition repo, TableDefinition live, string repoFilePath)
+    public DriftResult Diff(TableDefinition repo, TableDefinition live, string repoFilePath, DbProvider provider = DbProvider.SqlServer)
     {
-        var (fieldChanges, extraDbColumns) = DiffFields(repo, live);
+        var (fieldChanges, extraDbColumns) = DiffFields(repo, live, provider);
         var pkChange    = DiffPrimaryKey(repo, live);
         var fkChanges   = DiffForeignKeys(repo, live);
         var dataChanges = DiffData(repo, live);
@@ -50,7 +50,7 @@ public sealed class TableDiffer
     // ── Private diff steps ────────────────────────────────────────────────────
 
     private static (List<FieldChange> changes, List<string> extraDbColumns)
-        DiffFields(TableDefinition repo, TableDefinition live)
+        DiffFields(TableDefinition repo, TableDefinition live, DbProvider provider)
     {
         var repoByName = repo.Fields.ToDictionary(f => f.Name, FieldComparison.NameComparer);
         var liveByName = live.Fields.ToDictionary(f => f.Name, FieldComparison.NameComparer);
@@ -62,7 +62,7 @@ public sealed class TableDiffer
         {
             if (liveByName.TryGetValue(repoField.Name, out var liveField))
             {
-                changes.AddRange(FieldComparison.DetectChanges(repoField, liveField));
+                changes.AddRange(FieldComparison.DetectChanges(repoField, liveField, provider));
             }
             else
             {

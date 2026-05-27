@@ -145,7 +145,7 @@ public class DriftReportGeneratorTests
         report.Should().Contain("| Tables scanned (live) | 10 |");
         report.Should().Contain("| Tables in sync | 2 |");
         report.Should().Contain("| Tables with drift | 1 |");
-        report.Should().Contain("| Tables absent from DB | 1 |");
+        report.Should().Contain("| Tables absent from source | 1 |");
         report.Should().Contain("| Tables absent from repo (⚠) | 1 |");
     }
 
@@ -188,7 +188,7 @@ public class DriftReportGeneratorTests
 
         var report = _generator.Generate(session);
 
-        report.Should().Contain("Column removed from DB");
+        report.Should().Contain("Column absent from source");
         report.Should().Contain("`LegacyCode`");
     }
 
@@ -250,7 +250,7 @@ public class DriftReportGeneratorTests
 
         var report = _generator.Generate(session);
 
-        report.Should().Contain("FK added to DB");
+        report.Should().Contain("FK added to source");
         report.Should().Contain("`CustomerId`");
         report.Should().Contain("`dbo.Other.Id`");
     }
@@ -265,7 +265,7 @@ public class DriftReportGeneratorTests
 
         var report = _generator.Generate(session);
 
-        report.Should().Contain("FK removed from DB");
+        report.Should().Contain("FK removed from source");
         report.Should().Contain("`CustomerId`");
     }
 
@@ -306,7 +306,7 @@ public class DriftReportGeneratorTests
     // ── Extra DB columns (warnings within drifted table) ─────────────────────
 
     [Fact]
-    public void Generate_ExtraDbColumns_RenderedAsWarningInsideDriftedTable()
+    public void Generate_ExtraDbColumns_RenderedAsTableRowsInsideDriftedTable()
     {
         var session = EmptySession() with
         {
@@ -317,10 +317,14 @@ public class DriftReportGeneratorTests
 
         var report = _generator.Generate(session);
 
-        report.Should().Contain("Extra columns in DB");
+        // Extra columns must appear as "Column absent from repo" rows inside the change table.
+        report.Should().Contain("Column absent from repo");
         report.Should().Contain("`NewCol`");
         report.Should().Contain("`AnotherCol`");
+        // The summary note must mention db merge in standard (non-compare) mode.
         report.Should().Contain("db merge");
+        // The old bullet-list format must not appear.
+        report.Should().NotContain("Extra columns in source");
     }
 
     // ── Tables absent from DB (drift) ─────────────────────────────────────────
@@ -718,7 +722,7 @@ public class DriftReportGeneratorTests
         var report = _generator.Generate(session);
 
         report.Should().Contain("Column type changed");
-        report.Should().NotContain("FK added to DB");
+        report.Should().NotContain("FK added to source");
         report.Should().NotContain("`CustomerId`");
     }
 

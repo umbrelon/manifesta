@@ -58,6 +58,37 @@ public class TableDifferTests
         result.FieldChanges[0].NewValue.Should().Be("int");
     }
 
+    // ── SQL Server type-alias normalisation (no false drift) ──────────────────
+
+    [Theory]
+    [InlineData("datetime2",    "datetime2(7)")]
+    [InlineData("datetime2(7)", "datetime2")]
+    [InlineData("sysname",      "nvarchar(128)")]
+    [InlineData("integer",      "int")]
+    [InlineData("dec(18,0)",    "decimal(18,0)")]
+    [InlineData("decimal(18, 0)", "decimal(18,0)")]
+    public void Diff_SqlServerTypeAliases_NoDrift(string repoType, string sourceType)
+    {
+        var repo = Table(fields: [Field("Col", repoType)]);
+        var live = Table(fields: [Field("Col", sourceType)]);
+
+        var result = _differ.Diff(repo, live, RepoPath, DbProvider.SqlServer);
+
+        result.HasDrift.Should().BeFalse($"'{repoType}' and '{sourceType}' are equivalent SQL Server types");
+    }
+
+    [Fact]
+    public void Diff_SqlServerTypeAlias_StillDriftsForDifferentProviders()
+    {
+        var repo = Table(fields: [Field("CreatedAt", "datetime2")]);
+        var live = Table(fields: [Field("CreatedAt", "datetime2(7)")]);
+
+        // Without SQL Server provider context, bare datetime2 vs datetime2(7) is a real drift
+        var result = _differ.Diff(repo, live, RepoPath, DbProvider.Postgres);
+
+        result.HasDrift.Should().BeTrue();
+    }
+
     [Fact]
     public void Diff_ColumnNullabilityChanged_RecordedAsDrift()
     {

@@ -198,12 +198,14 @@ Manifesta is built on five principles that inform every design decision:
 flowchart LR
     A["DBML / Prisma\nschema file"] -->|"manifesta init"| B["Schema Registry\ntables/*.json\nsections/*.json"]
     DB[("Live database\n(optional)")] -->|"manifesta init db"| B
+    DB -->|"manifesta db merge"| B
+    B -->|"manifesta db drift"| DB
     B -->|"manifesta doc db"| C["database.md\n+ ERD diagrams"]
     B -->|"manifesta validate"| D["validation.json\ncross-validation.json"]
     B -->|"manifesta validate schema"| E["JSON Schema\nfor IDE autocomplete"]
 ```
 
-The schema registry is the hub. The init commands populate it; the doc and validate commands read from it. No command writes to the registry except `init`.
+The schema registry is the hub. `init` and `db merge` write to it; `doc`, `validate`, and `db drift` read from it.
 
 ---
 

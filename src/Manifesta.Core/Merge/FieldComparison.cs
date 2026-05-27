@@ -24,17 +24,30 @@ internal static class FieldComparison
     /// <summary>
     /// Normalises a SQL type string for comparison so that purely formatting
     /// differences (e.g. <c>decimal(18, 0)</c> vs <c>decimal(18,0)</c>, or
-    /// <c>dec</c> vs <c>decimal</c>) do not produce false drift.
+    /// <c>dec</c> vs <c>decimal</c>) and provider-specific default-precision
+    /// aliases (e.g. SQL Server <c>datetime2</c> vs <c>datetime2(7)</c>) do not
+    /// produce false drift.
     /// </summary>
-    internal static string? NormalizeTypeForComparison(string? type)
+    internal static string? NormalizeTypeForComparison(string? type, DbProvider? provider = null)
     {
         if (type is null) return null;
         var s = type.Trim().ToLowerInvariant();
-        // dec(...) → decimal(...)
+
+        // dec(...) → decimal(...) — T-SQL alias, safe for all providers
         if (s.StartsWith("dec(", StringComparison.Ordinal))
             s = "decimal" + s[3..];
+
         // Remove spaces inside precision/scale: decimal(18, 0) → decimal(18,0)
         s = s_precisionSpaceRx.Replace(s, "($1,$2)");
+
+        // SQL Server: expand bare aliases and default precisions
+        if (provider == DbProvider.SqlServer)
+        {
+            if (s == "sysname")   return "nvarchar(128)";
+            if (s == "integer")   return "int";
+            if (s == "datetime2") return "datetime2(7)";
+        }
+
         return s;
     }
 
@@ -55,12 +68,15 @@ internal static class FieldComparison
     /// <paramref name="repo"/> that differs from <paramref name="live"/>.
     /// Does not handle Added/Removed — callers own that logic.
     /// </summary>
-    internal static IReadOnlyList<FieldChange> DetectChanges(FieldDefinition repo, FieldDefinition live)
+    internal static IReadOnlyList<FieldChange> DetectChanges(
+        FieldDefinition repo,
+        FieldDefinition live,
+        DbProvider?     provider = null)
     {
         var changes = new List<FieldChange>();
 
-        var repoType = NormalizeTypeForComparison(repo.Type);
-        var liveType = NormalizeTypeForComparison(live.Type);
+        var repoType = NormalizeTypeForComparison(repo.Type, provider);
+        var liveType = NormalizeTypeForComparison(live.Type, provider);
         if (!string.Equals(repoType, liveType, StringComparison.OrdinalIgnoreCase))
             changes.Add(new FieldChange
             {

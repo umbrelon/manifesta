@@ -133,7 +133,7 @@ manifesta db drift --connection "..." --output-dir ./reports
 | `--schema` | No | — | **With `--connection`/`--input-dir`:** comma-separated schema filter (e.g. `public,app`); ignored for MySQL/SQLite. **With `--ddl-file`:** prefix applied to unqualified table names in the DDL (same as `init sql --schema`). |
 | `--recursive` / `-r` | No | false | Expand a plain filename `--pattern` to all subdirectories. Only applicable when `--ddl-file` is a directory. |
 | `--pattern` | No | `*.sql` | Glob pattern for file matching when `--ddl-file` is a directory. Plain filename patterns (e.g. `*_up.sql`) are controlled by `--recursive`. Path globs (e.g. `2024/**/*.sql`) are matched directly. |
-| `--strict` | No | false | Exit 1 on warnings (extra columns or tables in DB not present in the registry) |
+| `--strict` | No | false | Exit 1 on warnings (extra columns or tables in source not present in the registry) |
 | `--include-schema` | No | false | Embed full before/after field listings for each drifted table in the report |
 | `--no-fk-drifts` | No | false | Suppress FK change rows from the per-table drift sections |
 | `--no-index-drifts` | No | false | Suppress index change rows from the per-table drift sections |
@@ -189,22 +189,22 @@ A drifted table causes an exit code of `1`:
 
 | Change | Classified as |
 |--------|---------------|
-| Field type changed in DB | Drift |
-| Field nullability changed in DB | Drift |
-| Field default value changed in DB | Drift |
-| Computed expression changed in DB | Drift |
+| Field type changed in source | Drift |
+| Field nullability changed in source | Drift |
+| Field default value changed in source | Drift |
+| Computed expression changed in source | Drift |
 | Primary key column sequence changed | Drift |
-| Physical FK added or removed in DB | Drift |
+| Physical FK added or removed in source | Drift |
 | Physical FK cascade rule changed | Drift |
-| Field present in registry but absent from DB | Drift |
-| Table present in registry but absent from DB | Drift |
+| Field present in registry but absent from source | Drift |
+| Table present in registry but absent from source | Drift |
 
 The following are classified as **warnings** (exit `0` by default; exit `1` with `--strict`):
 
 | Change | Classified as |
 |--------|---------------|
-| Extra column in DB not in registry | Warning |
-| Extra table in DB not in registry | Warning |
+| Extra column in source not in registry | Warning |
+| Extra table in source not in registry | Warning |
 
 Logical and virtual FKs are always ignored — they are repo-sovereign and have no live DB representation.
 

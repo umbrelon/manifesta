@@ -959,6 +959,26 @@ public sealed class SqlDdlParserTests
     }
 
     [Fact]
+    public void SqlServer_NamedDefaultConstraint_NegativeValue_CapturedCorrectly()
+    {
+        // CONSTRAINT DF_name DEFAULT -1 — the named-constraint prefix must not
+        // swallow the DEFAULT clause, and the unary minus must not be dropped.
+        const string sql = """
+            CREATE TABLE [dbo].[Bundle] (
+                PackageID INT NOT NULL CONSTRAINT DF_Bundle_PackageID DEFAULT -1,
+                ProductID INT NOT NULL CONSTRAINT DF_Bundle_ProductID DEFAULT -1,
+                Score     INT NOT NULL DEFAULT -42
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var fields = r.Tables[0].Fields;
+        fields[0].Default.Should().Be("-1");
+        fields[1].Default.Should().Be("-1");
+        fields[2].Default.Should().Be("-42");
+    }
+
+    [Fact]
     public void SqlServer_DefaultNormalisation_BareKeywordsGetCanonicalForm()
     {
         // Bare keywords (no parens) that appear in hand-written DDL must be

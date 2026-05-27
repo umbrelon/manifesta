@@ -3,10 +3,10 @@ using System.Text;
 namespace Manifesta.Core.Merge;
 
 /// <summary>
-/// Renders the shared "Change / Field / Before / After" Markdown table used by
+/// Renders the shared "Change / Field / Repo / Source" Markdown table used by
 /// both <see cref="Drift.DriftReportGenerator"/> and <see cref="MergeReportGenerator"/>.
 /// The <c>dbSource</c> flag selects the label variant:
-/// <c>true</c> = drift labels ("Column removed from DB", "FK added to DB");
+/// <c>true</c> = drift labels ("Column absent from source", "FK added to source");
 /// <c>false</c> = merge labels ("Column removed", "FK added").
 /// </summary>
 internal static class DbChangeTableHelper
@@ -16,10 +16,11 @@ internal static class DbChangeTableHelper
         PrimaryKeyChange?          pkc,
         IReadOnlyList<FieldChange> fieldChanges,
         IReadOnlyList<FkChange>    fkChanges,
-        bool                       dbSource)
+        bool                       dbSource,
+        IReadOnlyList<(string Name, string Type)>? extraTargetColumns = null)
     {
-        sb.AppendLine("| Change | Field / Key | Before | After |");
-        sb.AppendLine("|--------|-------------|--------|-------|");
+        sb.AppendLine("| Change | Field / Key | Repo | Source |");
+        sb.AppendLine("|--------|-------------|------|--------|");
 
         if (pkc is not null)
         {
@@ -33,7 +34,7 @@ internal static class DbChangeTableHelper
             var (change, before, after) = fc.Kind switch
             {
                 FieldChangeKind.Added                     => ("Column added",                                                    "—",                       $"`{fc.NewValue}`"),
-                FieldChangeKind.Removed                   => (dbSource ? "Column removed from DB" : "Column removed",           $"`{fc.OldValue}`",        "—"),
+                FieldChangeKind.Removed                   => (dbSource ? "Column absent from source" : "Column removed",        $"`{fc.OldValue}`",        "—"),
                 FieldChangeKind.TypeChanged               => ("Column type changed",                                             $"`{fc.OldValue}`",        $"`{fc.NewValue}`"),
                 FieldChangeKind.NullabilityChanged        => ("Column nullability changed",                                      $"`{fc.OldValue}`",        $"`{fc.NewValue}`"),
                 FieldChangeKind.DefaultChanged            => ("Column default changed",                                          $"`{fc.OldValue ?? "—"}`", $"`{fc.NewValue ?? "—"}`"),
@@ -49,12 +50,18 @@ internal static class DbChangeTableHelper
             var fkDesc = $"`{fk.SourceField}` → `{fk.TargetTable}.{fk.TargetField}`";
             var (desc, before, after) = fk.Kind switch
             {
-                FkChangeKind.Added                => (dbSource ? "FK added to DB"    : "FK added",    "—",                fkDesc),
-                FkChangeKind.Removed              => (dbSource ? "FK removed from DB": "FK removed",  fkDesc,             "—"),
+                FkChangeKind.Added                => (dbSource ? "FK added to source"    : "FK added",    "—",                fkDesc),
+                FkChangeKind.Removed              => (dbSource ? "FK removed from source": "FK removed",  fkDesc,             "—"),
                 FkChangeKind.CascadeDeleteChanged => ("FK cascadeDelete changed",                      $"`{fk.OldValue}`", $"`{fk.NewValue}`"),
                 _                                 => ("FK changed",                                    fk.OldValue ?? "—", fk.NewValue ?? "—"),
             };
             sb.AppendLine($"| {desc} | {fkDesc} | {before} | {after} |");
+        }
+
+        if (extraTargetColumns is not null)
+        {
+            foreach (var (name, type) in extraTargetColumns)
+                sb.AppendLine($"| Column absent from repo | `{name}` | — | `{type}` |");
         }
 
         sb.AppendLine();

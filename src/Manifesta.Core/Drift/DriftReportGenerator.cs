@@ -46,11 +46,16 @@ public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
         sb.AppendLine($"| Tables scanned (live) | {session.TotalLiveTables} |");
         sb.AppendLine($"| Tables in sync | {session.CleanTables.Count} |");
         sb.AppendLine($"| Tables with drift | {session.DriftedTables.Count} |");
-        sb.AppendLine($"| Tables absent from DB | {session.MissingDbTables.Count} |");
+        sb.AppendLine($"| Tables absent from source | {session.MissingDbTables.Count} |");
         sb.AppendLine($"| Tables absent from repo (⚠) | {session.ExtraDbTables.Count} |");
         sb.AppendLine($"| FK changes | {totalFkChanges} |");
         sb.AppendLine($"| Index changes | {totalIndexChanges} |");
         sb.AppendLine();
+        if (sourceLabel == "Repository")
+        {
+            sb.AppendLine("> Columns present in the source but absent from the repository can be incorporated into the repo definition by running `manifesta db merge`.");
+            sb.AppendLine();
+        }
 
         // ── Drifted tables ───────────────────────────────────────────────────────
         if (session.DriftedTables.Count > 0)
@@ -121,18 +126,22 @@ public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
         sb.AppendLine();
 
         var effectiveFks = includeFkDrifts ? result.FkChanges : (IReadOnlyList<FkChange>)[];
-        var hasStructuralChanges = result.FieldChanges.Count > 0 || result.PrimaryKeyChange is not null || effectiveFks.Count > 0;
-        if (hasStructuralChanges)
-            DbChangeTableHelper.Append(sb, result.PrimaryKeyChange, result.FieldChanges, effectiveFks, dbSource: true);
 
-        if (result.HasWarnings)
+        IReadOnlyList<(string Name, string Type)>? extraTargetColumns = null;
+        if (result.ExtraDbColumns.Count > 0)
         {
-            sb.AppendLine("**Extra columns in DB (not in repo):**");
-            sb.AppendLine();
-            foreach (var col in result.ExtraDbColumns)
-                sb.AppendLine($"- `{col}` *(run `db merge` to add to repo)*");
-            sb.AppendLine();
+            var liveFieldIndex = result.LiveTable.Fields.ToDictionary(f => f.Name, f => f.Type, StringComparer.OrdinalIgnoreCase);
+            extraTargetColumns = result.ExtraDbColumns
+                .Select(col => (col, liveFieldIndex.TryGetValue(col, out var t) ? t : "unknown"))
+                .ToList();
         }
+
+        var hasStructuralChanges = result.FieldChanges.Count > 0
+                                || result.PrimaryKeyChange is not null
+                                || effectiveFks.Count > 0
+                                || extraTargetColumns is not null;
+        if (hasStructuralChanges)
+            DbChangeTableHelper.Append(sb, result.PrimaryKeyChange, result.FieldChanges, effectiveFks, dbSource: true, extraTargetColumns);
 
         if (result.DataChanges.Count > 0)
         {

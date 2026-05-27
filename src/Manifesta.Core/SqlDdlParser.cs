@@ -1101,6 +1101,19 @@ public sealed class SqlDdlParser
                 continue;
             }
 
+            // Negative number literal: -N (e.g. DEFAULT -1, DEFAULT -100)
+            // Only treat '-' as a unary minus when it immediately precedes digits so
+            // that binary minus in expressions (which are always parenthesised in SQL
+            // Server default contexts) is not accidentally captured here.
+            if (c == '-' && i + 1 < text.Length && char.IsDigit(text[i + 1]))
+            {
+                int start = i++; // include the '-'
+                while (i < text.Length && char.IsLetterOrDigit(text[i]))
+                    i++;
+                tokens.Add(text[start..i]);
+                continue;
+            }
+
             // Skip other punctuation (commas at depth 0 are handled before tokenising)
             i++;
         }

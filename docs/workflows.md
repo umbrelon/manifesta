@@ -349,7 +349,7 @@ manifesta db export \
 manifesta db drift --input-dir ./snapshots --output-dir ./reports
 ```
 
-`--strict` promotes "extra tables in DB not in registry" warnings to failures. Remove it if you only care about structural drift in tracked tables.
+`--strict` promotes "extra tables in source not in registry" warnings to failures. Remove it if you only care about structural drift in tracked tables.
 
 ---
 

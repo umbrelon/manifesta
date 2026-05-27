@@ -130,7 +130,7 @@ public sealed class DbDriftCommand : ManifestCommandBase
         "Schema handling — meaning depends on mode: " +
         "with --connection/--input-dir: comma-separated schema filter (default: all, ignored for MySQL/SQLite); " +
         "with --ddl-file: prefix applied to unqualified table names (same as init sql --schema).");
-    private readonly Option<bool>    _strict          = new(["--strict"],           () => false, "Exit 1 on warnings (extra columns/tables in DB not in repo)");
+    private readonly Option<bool>    _strict          = new(["--strict"],           () => false, "Exit 1 on warnings (extra columns/tables in source not in repo)");
     private readonly Option<bool>    _includeSchema   = new(["--include-schema"],   () => false, "Embed full before/after field listings for drifted tables in the report");
     private readonly Option<bool>    _noFkDrifts      = new(["--no-fk-drifts"],      () => false, "Suppress FK change rows from the drift report");
     private readonly Option<bool>    _noIndexDrifts   = new(["--no-index-drifts"],   () => false, "Suppress index change rows from the drift report");
@@ -374,14 +374,14 @@ public sealed class DbDriftCommand : ManifestCommandBase
         {
             OutputFormatter.WriteLine(
                 $"Drift detected — {drifted.Count} table(s) drifted, " +
-                $"{missingDbTables.Count} absent from DB. See {reportPath}.",
+                $"{missingDbTables.Count} absent from source. See {reportPath}.",
                 globals);
             return (int)ExitCode.ValidationErrors;
         }
 
         // Warnings only (no drift).
         OutputFormatter.WriteLine(
-            $"Warnings: {extraDbTables.Count} table(s) in DB have no repo definition. See {reportPath}.",
+            $"Warnings: {extraDbTables.Count} table(s) in source have no repo definition. See {reportPath}.",
             globals);
         return strict ? (int)ExitCode.ValidationErrors : (int)ExitCode.Success;
     }
