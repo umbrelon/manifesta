@@ -959,6 +959,83 @@ public sealed class SqlDdlParserTests
     }
 
     [Fact]
+    public void SqlServer_DefaultNormalisation_BareKeywordsGetCanonicalForm()
+    {
+        // Bare keywords (no parens) that appear in hand-written DDL must be
+        // normalised to the canonical function-call form so that drift detection
+        // does not produce false positives against live-db introspection results.
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [a] datetime  NOT NULL DEFAULT GETDATE,
+                [b] datetime  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                [c] nvarchar(128) NOT NULL DEFAULT SUSER_NAME,
+                [d] uniqueidentifier NOT NULL DEFAULT NEWID,
+                [e] datetime  NOT NULL DEFAULT GETUTCDATE,
+                [f] datetime  NOT NULL DEFAULT SYSUTCDATETIME
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var fields = r.Tables[0].Fields;
+        fields[0].Default.Should().Be("getdate()");
+        fields[1].Default.Should().Be("getdate()");    // CURRENT_TIMESTAMP synonym
+        fields[2].Default.Should().Be("suser_name()");
+        fields[3].Default.Should().Be("newid()");
+        fields[4].Default.Should().Be("getutcdate()");
+        fields[5].Default.Should().Be("sysutcdatetime()");
+    }
+
+    [Fact]
+    public void SqlServer_DefaultNormalisation_SystemUser_MapsToSuserSname()
+    {
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [a] nvarchar(128) NOT NULL DEFAULT SYSTEM_USER,
+                [b] nvarchar(128) NOT NULL DEFAULT system_user
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Tables[0].Fields[0].Default.Should().Be("suser_sname()");
+        r.Tables[0].Fields[1].Default.Should().Be("suser_sname()");
+    }
+
+    [Fact]
+    public void SqlServer_DefaultNormalisation_SpaceN_WrapsArgInExtraParens()
+    {
+        // sys.default_constraints stores space(1) as space((1)); normalise DDL to match.
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [a] char(1) NOT NULL DEFAULT space(1),
+                [b] char(5) NOT NULL DEFAULT SPACE(5)
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Tables[0].Fields[0].Default.Should().Be("space((1))");
+        r.Tables[0].Fields[1].Default.Should().Be("space((5))");
+    }
+
+    [Fact]
+    public void SqlServer_DefaultNormalisation_AlreadyCanonical_NotDoubled()
+    {
+        // Defaults that already include parentheses must not get a second pair added.
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [a] datetime      NOT NULL DEFAULT getdate(),
+                [b] nvarchar(128) NOT NULL DEFAULT suser_name(),
+                [c] uniqueidentifier NOT NULL DEFAULT newid()
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var fields = r.Tables[0].Fields;
+        fields[0].Default.Should().Be("getdate()");
+        fields[1].Default.Should().Be("suser_name()");
+        fields[2].Default.Should().Be("newid()");
+    }
+
+    [Fact]
     public void SqlServer_ParenthesisedDefaultExpression_Captured()
     {
         const string sql = """
@@ -1016,6 +1093,21 @@ public sealed class SqlDdlParserTests
         r.Tables[0].Fields[3].Type.Should().Be("datetime2(7)");
         r.Tables[0].Fields[4].Type.Should().Be("bit");
         r.Tables[0].Fields[5].Type.Should().Be("uniqueidentifier");
+    }
+
+    [Fact]
+    public void SqlServer_Datetime2WithoutPrecision_DefaultsToScale7()
+    {
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [a] [datetime2] NOT NULL,
+                [b] [datetime2](3) NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Tables[0].Fields[0].Type.Should().Be("datetime2(7)");
+        r.Tables[0].Fields[1].Type.Should().Be("datetime2(3)");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

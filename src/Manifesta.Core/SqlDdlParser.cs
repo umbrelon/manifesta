@@ -764,7 +764,7 @@ public sealed class SqlDdlParser
             Name               = colName,
             Type               = NormalizeType(rawType, provider),
             Nullable           = nullable,
-            Default            = defaultVal,
+            Default            = NormalizeDefault(defaultVal, provider),
             Description        = description ?? "",
             IsPrimaryKey       = isPk,
             IsComputed         = isComputed,
@@ -1079,14 +1079,75 @@ public sealed class SqlDdlParser
         }
 
         // Any other value (number, keyword like CURRENT_TIMESTAMP, function call)
-        // but not a column-modifier keyword
+        // but not a column-modifier keyword.
+        // The tokenizer splits "space(1)" into two tokens: "space" and "(1)".
+        // If the next token is a parenthesised group, stitch them back into one
+        // function-call string so normalisation and drift comparison work correctly.
         if (!IsKnownModifier(tok))
         {
             i++;
+            if (i < tokens.Count && tokens[i].StartsWith('('))
+                return tok + tokens[i++];
             return tok;
         }
 
         return null;
+    }
+
+    // ── Default-value normalisation ───────────────────────────────────────────
+
+    private static string? NormalizeDefault(string? value, DbProvider provider)
+    {
+        if (value is null) return null;
+        if (provider != DbProvider.SqlServer) return value;
+        return NormalizeSqlServerDefault(value);
+    }
+
+    /// <summary>
+    /// Canonicalises SQL Server default expressions that the DDL parser may see
+    /// as bare keywords (no parentheses) to their standard function-call form,
+    /// matching what <c>sys.default_constraints</c> returns when introspecting a
+    /// live database.
+    /// </summary>
+    private static string NormalizeSqlServerDefault(string value)
+    {
+        // Already has parentheses — only lowercase the function name, don't add another pair.
+        // Handles: getdate(), GETDATE(), suser_name(), SUSER_NAME(), newid(), etc.
+        var lower = value.ToLowerInvariant();
+        if (lower is "getdate()"
+                  or "suser_name()"
+                  or "suser_sname()"
+                  or "newid()"
+                  or "newsequentialid()"
+                  or "getutcdate()"
+                  or "sysutcdatetime()"
+                  or "sysdatetime()")
+            return lower;
+
+        // Bare keyword / function name without parentheses — add them and lowercase.
+        var result = lower switch
+        {
+            "getdate"          => "getdate()",
+            "current_timestamp"=> "getdate()",   // T-SQL synonym
+            "system_user"      => "suser_sname()", // T-SQL niladic synonym for suser_sname()
+            "suser_name"       => "suser_name()",
+            "suser_sname"      => "suser_sname()",
+            "newid"            => "newid()",
+            "newsequentialid"  => "newsequentialid()",
+            "getutcdate"       => "getutcdate()",
+            "sysutcdatetime"   => "sysutcdatetime()",
+            "sysdatetime"      => "sysdatetime()",
+            _ => null,
+        };
+        if (result is not null) return result;
+
+        // space(N) → space((N)): SQL Server stores integer literal arguments
+        // wrapped in an extra pair of parens in sys.default_constraints.
+        var spaceMatch = s_spaceArgRx.Match(value);
+        if (spaceMatch.Success)
+            return $"space(({spaceMatch.Groups[1].Value}))";
+
+        return value;
     }
 
     // ── Type normalisation ────────────────────────────────────────────────────
@@ -1148,6 +1209,12 @@ public sealed class SqlDdlParser
             var other => other,
         };
 
+    // Matches space(N) where N is an integer literal — used to normalise SQL Server
+    // DDL defaults to the form sys.default_constraints returns: space((N)).
+    private static readonly Regex s_spaceArgRx = new(
+        @"^space\((\d+)\)$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     // Matches precision/scale groups, e.g. "(18, 0)" or "( 10 , 2 )" — strips inner spaces.
     private static readonly Regex s_precisionSpacingRx = new(
         @"\(\s*(\d+)\s*,\s*(\d+)\s*\)",
@@ -1169,6 +1236,9 @@ public sealed class SqlDdlParser
 
         // Remove spaces inside precision/scale parentheses: decimal(18, 0) → decimal(18,0)
         lower = s_precisionSpacingRx.Replace(lower, "($1,$2)");
+
+        // datetime2 without explicit precision defaults to scale 7 in SQL Server
+        if (lower == "datetime2") return "datetime2(7)";
 
         return lower;
     }
