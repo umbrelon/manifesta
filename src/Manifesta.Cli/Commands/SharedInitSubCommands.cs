@@ -90,6 +90,11 @@ public sealed class InitSqlCommand : ManifestCommandBase
         "Glob pattern for file matching when --input is a directory (default: *.sql). " +
         "Plain filename patterns (e.g. *_up.sql) are controlled by --recursive. " +
         "Path globs (e.g. 2024/**/*.sql, **/create_*.sql) are matched directly and ignore --recursive");
+    private readonly Option<bool>    _lastWins      = new(["--last-wins"],
+        () => false,
+        "When the same table name appears in multiple input files, keep the last-parsed definition " +
+        "and emit a warning instead of failing. Useful when scanning a monorepo where shared tables " +
+        "are duplicated across modules.");
 
     public InitSqlCommand() : base("sql",
         "Parse SQL DDL files and write one table-definition JSON per table")
@@ -103,6 +108,7 @@ public sealed class InitSqlCommand : ManifestCommandBase
         AddOption(_provider);
         AddOption(_recursive);
         AddOption(_pattern);
+        AddOption(_lastWins);
 
         this.SetHandler(context => InvokeBaseAsync(context));
     }
@@ -119,6 +125,7 @@ public sealed class InitSqlCommand : ManifestCommandBase
         var provider      = SqlDdlProviderHelper.Parse(pr.GetValueForOption(_provider));
         var recursive     = pr.GetValueForOption(_recursive);
         var pattern       = pr.GetValueForOption(_pattern) ?? "*.sql";
+        var lastWins      = pr.GetValueForOption(_lastWins);
 
         // MySQL and SQLite have no schema namespace — both schema flags are no-ops.
         if (provider is DbProvider.MySql or DbProvider.Sqlite)
@@ -236,11 +243,30 @@ public sealed class InitSqlCommand : ManifestCommandBase
             .Where(g => g.Count() > 1)
             .ToList();
 
-        foreach (var dup in duplicates)
-            OutputFormatter.WriteError($"Duplicate table name '{dup.Key}' found across input files.");
-
         if (duplicates.Count > 0)
-            return (int)ExitCode.FatalSchemaErrors;
+        {
+            if (lastWins)
+            {
+                // Keep only the last definition for each name; emit a warning per duplicate.
+                foreach (var dup in duplicates)
+                    OutputFormatter.WriteWarning(
+                        $"Duplicate table name '{dup.Key}' found across input files — keeping last definition (--last-wins).");
+
+                var seen = new HashSet<string>(TableNames.Comparer);
+                // Iterate in reverse so the last occurrence is the one we keep.
+                for (int idx = allTables.Count - 1; idx >= 0; idx--)
+                {
+                    if (!seen.Add(allTables[idx].Name))
+                        allTables.RemoveAt(idx);
+                }
+            }
+            else
+            {
+                foreach (var dup in duplicates)
+                    OutputFormatter.WriteError($"Duplicate table name '{dup.Key}' found across input files.");
+                return (int)ExitCode.FatalSchemaErrors;
+            }
+        }
 
         // ── Write JSON files ──────────────────────────────────────────────────
         IWriter writer = globals.DryRun ? new DryRunWriter() : new AtomicWriter();
@@ -281,7 +307,9 @@ public sealed class InitSqlCommand : ManifestCommandBase
             $" into {outputDir}",
             globals);
 
-        return allErrors.Count > 0 || failed > 0
+        if (failed > 0)
+            return (int)ExitCode.ValidationErrors;
+        return allErrors.Count > 0 && !globals.WarnOnly
             ? (int)ExitCode.ValidationErrors
             : (int)ExitCode.Success;
     }

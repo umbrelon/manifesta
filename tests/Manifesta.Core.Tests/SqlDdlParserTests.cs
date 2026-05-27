@@ -1017,6 +1017,32 @@ public sealed class SqlDdlParserTests
     }
 
     [Fact]
+    public void SqlServer_DefaultNormalisation_DateLiterals_GetQuoted()
+    {
+        // Bare YYYYMMDD and YYYYMMDD HH:MM:SS literals must be wrapped in single
+        // quotes to match what sys.default_constraints returns for the live DB.
+        // This applies whether the DDL writes them bare or already quoted
+        // (UnquoteString strips the quotes; normalisation re-adds them).
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [a] datetime  NOT NULL DEFAULT 20000101,
+                [b] datetime  NOT NULL DEFAULT '20000101',
+                [c] datetime  NOT NULL DEFAULT (20000101),
+                [d] datetime  NOT NULL DEFAULT '29991231 23:59:59',
+                [e] datetime2 NOT NULL DEFAULT '20000101 00:00:00.0000000'
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var fields = r.Tables[0].Fields;
+        fields[0].Default.Should().Be("'20000101'");   // bare integer
+        fields[1].Default.Should().Be("'20000101'");   // quoted → unquoted → re-quoted
+        fields[2].Default.Should().Be("'20000101'");   // parenthesised bare integer
+        fields[3].Default.Should().Be("'29991231 23:59:59'");
+        fields[4].Default.Should().Be("'20000101 00:00:00.0000000'");
+    }
+
+    [Fact]
     public void SqlServer_DefaultNormalisation_AlreadyCanonical_NotDoubled()
     {
         // Defaults that already include parentheses must not get a second pair added.
@@ -1048,6 +1074,30 @@ public sealed class SqlDdlParserTests
         var r = _parser.Parse(sql, DbProvider.SqlServer);
         r.Tables[0].Fields[0].Default.Should().Be("newid()");
         r.Tables[0].Fields[1].Default.Should().Be("getutcdate()");
+    }
+
+    [Fact]
+    public void SqlServer_NamedConstraintDefault_CapturedCorrectly()
+    {
+        const string sql = """
+            CREATE TABLE [dbo].[Address] (
+                [lParent]          int          NOT NULL CONSTRAINT DF_Address_lParent   DEFAULT ((-1)),
+                [szName]           varchar(81)  NOT NULL CONSTRAINT DF_Address_szName    DEFAULT (''),
+                [cPaymentMethod]   smallint     NOT NULL CONSTRAINT DF_Address_cPayment  DEFAULT (0),
+                [dCreate]          datetime     NULL     CONSTRAINT DF_Address_dCreate   DEFAULT (getdate()),
+                [szUser]           varchar(64)  NULL     CONSTRAINT DF_Address_szUser    DEFAULT (suser_sname()),
+                [lNoConstraint]    int          NOT NULL DEFAULT (42)
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var fields = r.Tables[0].Fields;
+        fields[0].Default.Should().Be("(-1)");
+        fields[1].Default.Should().Be("''");
+        fields[2].Default.Should().Be("0");
+        fields[3].Default.Should().Be("getdate()");
+        fields[4].Default.Should().Be("suser_sname()");
+        fields[5].Default.Should().Be("42");
     }
 
     [Fact]
@@ -1093,6 +1143,76 @@ public sealed class SqlDdlParserTests
         r.Tables[0].Fields[3].Type.Should().Be("datetime2(7)");
         r.Tables[0].Fields[4].Type.Should().Be("bit");
         r.Tables[0].Fields[5].Type.Should().Be("uniqueidentifier");
+    }
+
+    [Fact]
+    public void SqlServer_IdentityColumn_ImpliedNotNull()
+    {
+        // IDENTITY columns must never be nullable even when NOT NULL is omitted.
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [Id] [int] IDENTITY(1,1),
+                [Name] [nvarchar](50) NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var fields = r.Tables[0].Fields;
+        fields[0].Name.Should().Be("Id");
+        fields[0].Nullable.Should().BeFalse("IDENTITY implies NOT NULL");
+        fields[1].Nullable.Should().BeFalse();
+    }
+
+    [Fact]
+    public void SqlServer_TrailingConstraintWithoutComma_CorrectPkColumn()
+    {
+        // Reproduces a real-world pattern: the CONSTRAINT clause is attached to the
+        // last column entry without a separating comma. The parser must register the
+        // column(s) listed inside the CONSTRAINT, not the column the clause is
+        // attached to, as the primary key.
+        const string sql = """
+            CREATE TABLE HlrProfile (
+                [HlrProfileId] [int] IDENTITY(1,1),
+                [SN] [VARCHAR](32) NOT NULL,
+                [MSISDN] VARCHAR(20) NOT NULL,
+                [ProfileType] [TINYINT] NOT NULL,
+                [Value] [NVARCHAR](MAX) NOT NULL,
+                [LastUpdated] [DATETIME] NOT NULL
+                CONSTRAINT PK_HlrProfile PRIMARY KEY CLUSTERED (HlrProfileId) ON [PRIMARY]
+            ) ON [PRIMARY]
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var table = r.Tables[0];
+
+        // Correct PK
+        table.PrimaryKey.Should().ContainSingle().Which.Should().Be("HlrProfileId");
+
+        // LastUpdated must NOT be marked as PK (it has NOT NULL in the DDL so Nullable=false is correct)
+        table.Fields.First(f => f.Name == "LastUpdated").IsPrimaryKey.Should().BeFalse();
+
+        // HlrProfileId: IDENTITY → NOT NULL; in PK → NOT NULL via post-pass
+        var pkField = table.Fields.First(f => f.Name == "HlrProfileId");
+        pkField.IsPrimaryKey.Should().BeTrue();
+        pkField.Nullable.Should().BeFalse();
+    }
+
+    [Fact]
+    public void SqlServer_PkColumnsAlwaysNotNull()
+    {
+        // A table-level PRIMARY KEY constraint must force all listed columns to
+        // nullable=false even when they lack an explicit NOT NULL in the DDL.
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [a] int,
+                [b] int NOT NULL,
+                PRIMARY KEY (a, b)
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Tables[0].Fields[0].Nullable.Should().BeFalse("PK column a must be NOT NULL");
+        r.Tables[0].Fields[1].Nullable.Should().BeFalse("PK column b must be NOT NULL");
     }
 
     [Fact]

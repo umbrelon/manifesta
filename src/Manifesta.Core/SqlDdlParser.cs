@@ -338,6 +338,16 @@ public sealed class SqlDdlParser
         if (pkCols.Count == 0)
             pkCols.AddRange(fields.Where(f => f.IsPrimaryKey).Select(f => f.Name));
 
+        // PK columns are always NOT NULL and must be marked IsPrimaryKey — enforce this
+        // regardless of whether the DDL writer omitted NOT NULL (e.g. IDENTITY columns)
+        // or the PK was declared via a table-level CONSTRAINT rather than inline.
+        var pkSet = new HashSet<string>(pkCols, StringComparer.OrdinalIgnoreCase);
+        fields = fields
+            .Select(f => pkSet.Contains(f.Name)
+                ? f with { Nullable = false, IsPrimaryKey = true }
+                : f)
+            .ToList();
+
         var table = new TableDefinition
         {
             Name              = fullName,
@@ -640,9 +650,10 @@ public sealed class SqlDdlParser
                 continue;
             }
 
-            // IDENTITY [(seed, increment)] — SQL Server; strip
+            // IDENTITY [(seed, increment)] — SQL Server; implies NOT NULL
             if (tok.Equals("IDENTITY", StringComparison.OrdinalIgnoreCase))
             {
+                nullable = false;
                 i++;
                 if (i < tokens.Count && tokens[i].StartsWith('('))
                     i++; // skip (seed, increment)
@@ -736,6 +747,56 @@ public sealed class SqlDdlParser
                 if (i < tokens.Count && tokens[i].StartsWith('('))
                     i++;
                 continue;
+            }
+
+            // CONSTRAINT [name] <type> — two distinct cases:
+            //   (a) Inline column constraint without a column list, e.g.
+            //       [Id] int CONSTRAINT PK_T PRIMARY KEY
+            //       → treat as PRIMARY KEY on the current column.
+            //   (b) Table-level constraint appended to the last column due to a
+            //       missing comma separator, e.g.
+            //       [LastUpdated] datetime NOT NULL
+            //       CONSTRAINT PK_T PRIMARY KEY CLUSTERED (Id) ON [PRIMARY]
+            //       → register the listed columns as PK; do NOT mark current column.
+            if (tok.Equals("CONSTRAINT", StringComparison.OrdinalIgnoreCase))
+            {
+                i++; // skip CONSTRAINT
+                // Skip optional constraint name
+                if (i < tokens.Count && !IsConstraintTypeKeyword(tokens[i]))
+                    i++;
+
+                // Named DEFAULT constraint: CONSTRAINT DF_xxx DEFAULT (value)
+                // Let the DEFAULT handler in the main loop pick up the value.
+                if (i < tokens.Count && tokens[i].Equals("DEFAULT", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (i + 1 < tokens.Count &&
+                    tokens[i].Equals("PRIMARY",   StringComparison.OrdinalIgnoreCase) &&
+                    tokens[i + 1].Equals("KEY", StringComparison.OrdinalIgnoreCase))
+                {
+                    i += 2; // skip PRIMARY KEY
+                    // Skip optional CLUSTERED / NONCLUSTERED
+                    if (i < tokens.Count &&
+                        (tokens[i].Equals("CLUSTERED",    StringComparison.OrdinalIgnoreCase) ||
+                         tokens[i].Equals("NONCLUSTERED", StringComparison.OrdinalIgnoreCase)))
+                        i++;
+
+                    if (i < tokens.Count && tokens[i].StartsWith('('))
+                    {
+                        // Column list present → table-level constraint; register those columns
+                        pkCols.AddRange(ParseColumnList(tokens[i]));
+                        // Do NOT mark the current column as PK
+                    }
+                    else
+                    {
+                        // No column list → inline constraint on the current column
+                        isPk     = true;
+                        nullable = false;
+                    }
+                }
+
+                // Remaining tokens (ON [filegroup], WITH (...), etc.) are storage options; stop
+                break;
             }
 
             // Anything else — silently skip
@@ -1147,6 +1208,15 @@ public sealed class SqlDdlParser
         if (spaceMatch.Success)
             return $"space(({spaceMatch.Groups[1].Value}))";
 
+        // Unseparated date/datetime literals must be quoted to match the form
+        // sys.default_constraints returns after stripping its outer parentheses.
+        // Handles both:
+        //   DEFAULT 20000101           (bare)   → '20000101'
+        //   DEFAULT '20000101'         (quoted) → '20000101'  (UnquoteString stripped the quotes)
+        //   DEFAULT '29991231 23:59:59'          → '29991231 23:59:59'
+        if (s_sqlServerDateLiteralRx.IsMatch(value))
+            return $"'{value}'";
+
         return value;
     }
 
@@ -1214,6 +1284,14 @@ public sealed class SqlDdlParser
     private static readonly Regex s_spaceArgRx = new(
         @"^space\((\d+)\)$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // Matches SQL Server unseparated date literals that must be stored quoted.
+    //   YYYYMMDD                    e.g. 20000101
+    //   YYYYMMDD HH:MM:SS           e.g. 29991231 23:59:59
+    //   YYYYMMDD HH:MM:SS.fffffff   e.g. 20000101 00:00:00.0000000
+    private static readonly Regex s_sqlServerDateLiteralRx = new(
+        @"^\d{8}( \d{2}:\d{2}:\d{2}(\.\d+)?)?$",
+        RegexOptions.Compiled);
 
     // Matches precision/scale groups, e.g. "(18, 0)" or "( 10 , 2 )" — strips inner spaces.
     private static readonly Regex s_precisionSpacingRx = new(
