@@ -806,4 +806,91 @@ public class TableMergerTests
         newField.ComputedExpression.Should().Be("([F]+' '+[L])");
         newField.Description.Should().BeEmpty("new columns start with no description");
     }
+
+    // ── Index merge ───────────────────────────────────────────────────────────
+
+    private static IndexDefinition Idx(string name, params string[] columns) => new()
+    {
+        Name    = name,
+        Columns = columns.ToList().AsReadOnly(),
+    };
+
+    private static TableDefinition TableWithIndexes(IEnumerable<IndexDefinition> indexes) =>
+        new()
+        {
+            Name        = "dbo.Order",
+            Fields      = [Field("Id", "int", isPk: true)],
+            PrimaryKey  = ["Id"],
+            ForeignKeys = [],
+            Indexes     = indexes.ToList().AsReadOnly(),
+        };
+
+    [Fact]
+    public void Merge_IdenticalIndexes_IndexesChangedFalse()
+    {
+        var repo = TableWithIndexes([Idx("idx_name", "Name")]);
+        var live = TableWithIndexes([Idx("idx_name", "Name")]);
+
+        var result = _merger.Merge(repo, live, RepoPath);
+
+        result.IndexesChanged.Should().BeFalse();
+        result.HasChanges.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Merge_IndexAdded_IndexesChangedTrue()
+    {
+        var repo = TableWithIndexes([]);
+        var live = TableWithIndexes([Idx("idx_last_name", "LastName")]);
+
+        var result = _merger.Merge(repo, live, RepoPath);
+
+        result.IndexesChanged.Should().BeTrue();
+        result.HasChanges.Should().BeTrue();
+        result.Merged.Indexes.Should().ContainSingle(i => i.Name == "idx_last_name");
+    }
+
+    [Fact]
+    public void Merge_IndexRemoved_IndexesChangedTrue()
+    {
+        var repo = TableWithIndexes([Idx("idx_old", "OldCol")]);
+        var live = TableWithIndexes([]);
+
+        var result = _merger.Merge(repo, live, RepoPath);
+
+        result.IndexesChanged.Should().BeTrue();
+        result.HasChanges.Should().BeTrue();
+        result.Merged.Indexes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Merge_IndexColumnListChanged_IndexesChangedTrue()
+    {
+        var repo = TableWithIndexes([Idx("idx_composite", "A")]);
+        var live = TableWithIndexes([Idx("idx_composite", "A", "B")]);
+
+        var result = _merger.Merge(repo, live, RepoPath);
+
+        result.IndexesChanged.Should().BeTrue();
+        result.HasChanges.Should().BeTrue();
+        result.Merged.Indexes.Single(i => i.Name == "idx_composite").Columns
+              .Should().Equal("A", "B");
+    }
+
+    [Fact]
+    public void Merge_NoColumnOrFkChanges_ButIndexAdded_IsCountedAsModified()
+    {
+        // Regression guard: a table with only index drift must land in "modified",
+        // not "unchanged" — verifies HasChanges includes IndexesChanged.
+        var repo = TableWithIndexes([]);
+        var live = TableWithIndexes([Idx("idx_fk_city_id", "CityId")]);
+
+        var result = _merger.Merge(repo, live, RepoPath);
+
+        result.FieldChanges.Should().BeEmpty("no column changes");
+        result.FkChanges.Should().BeEmpty("no FK changes");
+        result.PrimaryKeyChange.Should().BeNull("no PK changes");
+        result.IndexesChanged.Should().BeTrue();
+        result.HasChanges.Should().BeTrue("index change must count as a structural change");
+    }
 }

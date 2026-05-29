@@ -75,8 +75,42 @@ public sealed class TableMerger
             PrimaryKeyChange  = pkChange,
             OrphanColumnNames = orphanColumnNames.AsReadOnly(),
             OrphanedDataKeys  = orphanedDataKeys.AsReadOnly(),
+            IndexesChanged    = IndexesStructurallyDiffer(repo.Indexes, live.Indexes),
             // NonSoftFkRemovedWarnings always empty: Physical FK removals are now in FkChanges.
         };
+    }
+
+    // ── Index comparison ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns <c>true</c> when the two index lists differ structurally:
+    /// different names, different column lists for the same name, or different
+    /// uniqueness / clustering / filter settings.
+    /// </summary>
+    private static bool IndexesStructurallyDiffer(
+        IReadOnlyList<IndexDefinition> repo,
+        IReadOnlyList<IndexDefinition> live)
+    {
+        if (repo.Count != live.Count) return true;
+
+        var repoByName = repo.ToDictionary(i => i.Name, StringComparer.OrdinalIgnoreCase);
+        foreach (var liveIdx in live)
+        {
+            if (!repoByName.TryGetValue(liveIdx.Name, out var repoIdx))
+                return true;
+
+            if (repoIdx.IsUnique     != liveIdx.IsUnique     ||
+                repoIdx.IsClustered  != liveIdx.IsClustered  ||
+                repoIdx.IsFiltered   != liveIdx.IsFiltered   ||
+                repoIdx.FilterExpression != liveIdx.FilterExpression ||
+                repoIdx.IncludedColumns  != liveIdx.IncludedColumns)
+                return true;
+
+            if (!repoIdx.Columns.SequenceEqual(liveIdx.Columns, StringComparer.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     // ── Private merge steps ───────────────────────────────────────────────────

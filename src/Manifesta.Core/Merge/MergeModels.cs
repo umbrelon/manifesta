@@ -87,12 +87,16 @@ public sealed record MergeResult
     /// <summary>True when reference table data was replaced with freshly captured rows.</summary>
     public bool DataRefreshed { get; init; }
 
+    /// <summary>True when the set of indexes (names or columns) changed between repo and live.</summary>
+    public bool IndexesChanged { get; init; }
+
     /// <summary>True when at least one structural change was detected, or reference data was refreshed.</summary>
     public bool HasChanges =>
         FieldChanges.Count > 0 ||
         FkChanges.Count    > 0 ||
         PrimaryKeyChange   is not null ||
-        DataRefreshed;
+        DataRefreshed      ||
+        IndexesChanged;
 }
 
 // ─── Session-level aggregates ─────────────────────────────────────────────────
