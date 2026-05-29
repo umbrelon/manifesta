@@ -433,8 +433,12 @@ public sealed class SqlDdlParser
         // constraint entries so they are routed to ParseConstraintEntry and
         // silently skipped (like any other inline KEY/INDEX in v1), rather than
         // being misread as a column named "SPATIAL" or "FULLTEXT".
+        // SQL Server PERIOD FOR SYSTEM_TIME (col1, col2) appears inside temporal
+        // table CREATE TABLE bodies and must be similarly skipped — otherwise the
+        // parser creates a phantom column named "PERIOD".
         if (tokens[idx].Equals("SPATIAL",  StringComparison.OrdinalIgnoreCase) ||
-            tokens[idx].Equals("FULLTEXT", StringComparison.OrdinalIgnoreCase))
+            tokens[idx].Equals("FULLTEXT", StringComparison.OrdinalIgnoreCase) ||
+            tokens[idx].Equals("PERIOD",   StringComparison.OrdinalIgnoreCase))
             return true;
 
         return IsConstraintTypeKeyword(tokens[idx]);
@@ -469,12 +473,41 @@ public sealed class SqlDdlParser
         if (i >= tokens.Count) return null;
 
         // ── SQL Server computed column: name AS (expr) [PERSISTED] ────────────
+        // Also handles method-call form: name AS [Col].[Method]()
         if (tokens[i].Equals("AS", StringComparison.OrdinalIgnoreCase))
         {
             i++;
-            var expr = i < tokens.Count && tokens[i].StartsWith('(')
-                ? tokens[i++][1..^1].Trim()
-                : string.Empty;
+
+            // Collect all tokens that form the expression, stopping at known column
+            // modifiers (PERSISTED, NOT, NULL, CONSTRAINT, WITH, ON, …).
+            // The tokenizer represents `[A].[B]()` as separate tokens: `[A]`, `[B]`, `()`.
+            // The dot between identifiers is skipped as punctuation — so we just
+            // concatenate consecutive identifier/paren tokens, rejoining with '.' when
+            // both sides look like identifiers.
+            string? expr = null;
+            if (i < tokens.Count && !IsComputedExpressionTerminator(tokens[i]))
+            {
+                var exprSb = new StringBuilder();
+                while (i < tokens.Count && !IsComputedExpressionTerminator(tokens[i]))
+                {
+                    var tok = tokens[i++];
+                    // Parenthesised groups attach directly to preceding token
+                    if (tok.StartsWith('('))
+                        exprSb.Append(tok);
+                    else if (exprSb.Length > 0 && !exprSb.ToString().EndsWith('('))
+                        exprSb.Append('.').Append(tok);
+                    else
+                        exprSb.Append(tok);
+                }
+                var raw = exprSb.ToString().Trim().Trim('.');
+
+                // If the entire expression is parenthesised, strip the outer parens
+                // to match what sys.computed_columns stores (it adds its own wrapping).
+                expr = raw.StartsWith('(') && raw.EndsWith(')')
+                    ? raw[1..^1].Trim()
+                    : raw;
+            }
+
             bool persisted = i < tokens.Count &&
                              tokens[i].Equals("PERSISTED", StringComparison.OrdinalIgnoreCase);
 
@@ -558,13 +591,17 @@ public sealed class SqlDdlParser
             tokens[i].Equals("GENERATED", StringComparison.OrdinalIgnoreCase))
         {
             // Consume: GENERATED [ALWAYS | BY DEFAULT] [AS IDENTITY | AS (expr) [STORED|VIRTUAL]]
+            // SQL Server system-time columns use: GENERATED ALWAYS AS ROW START/END HIDDEN
+            // Stop before NOT/NULL so the modifiers loop can apply nullability correctly.
             i++;
-            // Skip ALWAYS / BY DEFAULT
+            // Skip ALWAYS / BY DEFAULT / AS / ROW / START / END / HIDDEN etc.
             while (i < tokens.Count &&
                    !tokens[i].StartsWith('(') &&
-                   !tokens[i].Equals("STORED",  StringComparison.OrdinalIgnoreCase) &&
-                   !tokens[i].Equals("VIRTUAL", StringComparison.OrdinalIgnoreCase) &&
-                   !tokens[i].Equals("IDENTITY", StringComparison.OrdinalIgnoreCase))
+                   !tokens[i].Equals("NOT",      StringComparison.OrdinalIgnoreCase) &&
+                   !tokens[i].Equals("NULL",      StringComparison.OrdinalIgnoreCase) &&
+                   !tokens[i].Equals("STORED",    StringComparison.OrdinalIgnoreCase) &&
+                   !tokens[i].Equals("VIRTUAL",   StringComparison.OrdinalIgnoreCase) &&
+                   !tokens[i].Equals("IDENTITY",  StringComparison.OrdinalIgnoreCase))
                 i++;
 
             if (i < tokens.Count && tokens[i].Equals("IDENTITY", StringComparison.OrdinalIgnoreCase))
@@ -744,8 +781,10 @@ public sealed class SqlDdlParser
             }
 
             // INVISIBLE / VISIBLE — MySQL 8; strip
+            // HIDDEN — SQL Server system-time columns (GENERATED ALWAYS AS ROW START/END HIDDEN); strip
             if (tok.Equals("INVISIBLE", StringComparison.OrdinalIgnoreCase) ||
-                tok.Equals("VISIBLE",   StringComparison.OrdinalIgnoreCase))
+                tok.Equals("VISIBLE",   StringComparison.OrdinalIgnoreCase) ||
+                tok.Equals("HIDDEN",    StringComparison.OrdinalIgnoreCase))
             {
                 i++;
                 continue;
@@ -1339,8 +1378,10 @@ public sealed class SqlDdlParser
         // Remove spaces inside precision/scale parentheses: decimal(18, 0) → decimal(18,0)
         lower = s_precisionSpacingRx.Replace(lower, "($1,$2)");
 
-        // datetime2 without explicit precision defaults to scale 7 in SQL Server
-        if (lower == "datetime2") return "datetime2(7)";
+        // datetime2 / time / datetimeoffset without explicit precision default to scale 7
+        if (lower == "datetime2")      return "datetime2(7)";
+        if (lower == "time")           return "time(7)";
+        if (lower == "datetimeoffset") return "datetimeoffset(7)";
 
         return lower;
     }
@@ -1431,6 +1472,20 @@ public sealed class SqlDdlParser
             .Where(c => !string.IsNullOrWhiteSpace(c))
             .ToList();
     }
+
+    /// <summary>
+    /// Returns <c>true</c> when a token signals the end of a SQL Server computed-column
+    /// expression (<c>name AS expr [PERSISTED]</c>). Used to know when to stop
+    /// collecting expression tokens.
+    /// </summary>
+    private static bool IsComputedExpressionTerminator(string t) =>
+        t.Equals("PERSISTED",  StringComparison.OrdinalIgnoreCase) ||
+        t.Equals("NOT",        StringComparison.OrdinalIgnoreCase) ||
+        t.Equals("NULL",       StringComparison.OrdinalIgnoreCase) ||
+        t.Equals("CONSTRAINT", StringComparison.OrdinalIgnoreCase) ||
+        t.Equals("WITH",       StringComparison.OrdinalIgnoreCase) ||
+        t.Equals("ON",         StringComparison.OrdinalIgnoreCase) ||
+        t.Equals("FOR",        StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Returns <c>true</c> when the token is a well-known column modifier keyword.

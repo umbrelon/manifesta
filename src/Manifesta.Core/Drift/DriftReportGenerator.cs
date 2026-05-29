@@ -188,6 +188,46 @@ public sealed class DriftReportGenerator : IGenerator<DriftSession, string>
             sb.AppendLine();
         }
 
+        if (result.CheckConstraintChanges.Count > 0)
+        {
+            sb.AppendLine($"**Check constraint drift ({result.CheckConstraintChanges.Count} change(s)):**");
+            sb.AppendLine();
+            sb.AppendLine("| Change | Constraint | Details |");
+            sb.AppendLine("|--------|-----------|---------|");
+            foreach (var cc in result.CheckConstraintChanges)
+            {
+                var (label, details) = cc.Kind switch
+                {
+                    CheckConstraintChangeKind.Added             => ("Constraint added",      $"Expression: {cc.NewExpression}"),
+                    CheckConstraintChangeKind.Removed           => ("Constraint removed",    $"Expression: {cc.OldExpression}"),
+                    CheckConstraintChangeKind.ExpressionChanged => ("Expression changed",    $"{cc.OldExpression} → {cc.NewExpression}"),
+                    _                                           => ("Changed",               "—"),
+                };
+                sb.AppendLine($"| {label} | `{cc.ConstraintName}` | {details} |");
+            }
+            sb.AppendLine();
+        }
+
+        if (result.UniqueConstraintChanges.Count > 0)
+        {
+            sb.AppendLine($"**Unique constraint drift ({result.UniqueConstraintChanges.Count} change(s)):**");
+            sb.AppendLine();
+            sb.AppendLine("| Change | Constraint | Details |");
+            sb.AppendLine("|--------|-----------|---------|");
+            foreach (var uc in result.UniqueConstraintChanges)
+            {
+                var (label, details) = uc.Kind switch
+                {
+                    UniqueConstraintChangeKind.Added          => ("Constraint added",   $"Columns: {uc.NewColumns}"),
+                    UniqueConstraintChangeKind.Removed        => ("Constraint removed", $"Columns: {uc.OldColumns}"),
+                    UniqueConstraintChangeKind.ColumnsChanged => ("Columns changed",    $"{uc.OldColumns} → {uc.NewColumns}"),
+                    _                                         => ("Changed",            "—"),
+                };
+                sb.AppendLine($"| {label} | `{uc.ConstraintName}` | {details} |");
+            }
+            sb.AppendLine();
+        }
+
         if (includeSchema)
         {
             AppendSchemaTable(sb, $"{sourceLabel} definition", result.RepoTable.Fields);

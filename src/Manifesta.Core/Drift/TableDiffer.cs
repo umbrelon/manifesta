@@ -27,23 +27,27 @@ public sealed class TableDiffer
     public DriftResult Diff(TableDefinition repo, TableDefinition live, string repoFilePath, DbProvider provider = DbProvider.SqlServer)
     {
         var (fieldChanges, extraDbColumns) = DiffFields(repo, live, provider);
-        var pkChange    = DiffPrimaryKey(repo, live);
-        var fkChanges   = DiffForeignKeys(repo, live);
-        var dataChanges = DiffData(repo, live);
-        var idxChanges  = DiffIndexes(repo, live);
+        var pkChange       = DiffPrimaryKey(repo, live);
+        var fkChanges      = DiffForeignKeys(repo, live);
+        var dataChanges    = DiffData(repo, live);
+        var idxChanges     = DiffIndexes(repo, live);
+        var checkChanges   = DiffCheckConstraints(repo, live);
+        var uniqueChanges  = DiffUniqueConstraints(repo, live);
 
         return new DriftResult
         {
-            TableName        = repo.Name,
-            RepoFilePath     = repoFilePath,
-            RepoTable        = repo,
-            LiveTable        = live,
-            FieldChanges     = fieldChanges.AsReadOnly(),
-            FkChanges        = fkChanges.AsReadOnly(),
-            PrimaryKeyChange = pkChange,
-            ExtraDbColumns   = extraDbColumns.AsReadOnly(),
-            DataChanges      = dataChanges.AsReadOnly(),
-            IndexChanges     = idxChanges.AsReadOnly(),
+            TableName               = repo.Name,
+            RepoFilePath            = repoFilePath,
+            RepoTable               = repo,
+            LiveTable               = live,
+            FieldChanges            = fieldChanges.AsReadOnly(),
+            FkChanges               = fkChanges.AsReadOnly(),
+            PrimaryKeyChange        = pkChange,
+            ExtraDbColumns          = extraDbColumns.AsReadOnly(),
+            DataChanges             = dataChanges.AsReadOnly(),
+            IndexChanges            = idxChanges.AsReadOnly(),
+            CheckConstraintChanges  = checkChanges.AsReadOnly(),
+            UniqueConstraintChanges = uniqueChanges.AsReadOnly(),
         };
     }
 
@@ -303,5 +307,100 @@ public sealed class TableDiffer
             if (!repo.ContainsKey(k))
                 changed.Add(k);
         return changed;
+    }
+
+    // ── Check constraint diff ─────────────────────────────────────────────────
+
+    private static List<CheckConstraintChange> DiffCheckConstraints(
+        TableDefinition repo, TableDefinition live)
+    {
+        var repoByName = repo.CheckConstraints.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+        var liveByName = live.CheckConstraints.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+        var changes    = new List<CheckConstraintChange>();
+
+        foreach (var repoC in repo.CheckConstraints)
+        {
+            if (!liveByName.TryGetValue(repoC.Name, out var liveC))
+            {
+                changes.Add(new CheckConstraintChange
+                {
+                    Kind           = CheckConstraintChangeKind.Removed,
+                    ConstraintName = repoC.Name,
+                    OldExpression  = repoC.Expression,
+                });
+            }
+            else if (!string.Equals(repoC.Expression, liveC.Expression, StringComparison.OrdinalIgnoreCase))
+            {
+                changes.Add(new CheckConstraintChange
+                {
+                    Kind           = CheckConstraintChangeKind.ExpressionChanged,
+                    ConstraintName = repoC.Name,
+                    OldExpression  = repoC.Expression,
+                    NewExpression  = liveC.Expression,
+                });
+            }
+        }
+
+        foreach (var liveC in live.CheckConstraints)
+        {
+            if (!repoByName.ContainsKey(liveC.Name))
+                changes.Add(new CheckConstraintChange
+                {
+                    Kind           = CheckConstraintChangeKind.Added,
+                    ConstraintName = liveC.Name,
+                    NewExpression  = liveC.Expression,
+                });
+        }
+
+        return changes;
+    }
+
+    // ── Unique constraint diff ────────────────────────────────────────────────
+
+    private static List<UniqueConstraintChange> DiffUniqueConstraints(
+        TableDefinition repo, TableDefinition live)
+    {
+        var repoByName = repo.UniqueConstraints.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+        var liveByName = live.UniqueConstraints.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+        var changes    = new List<UniqueConstraintChange>();
+
+        foreach (var repoC in repo.UniqueConstraints)
+        {
+            if (!liveByName.TryGetValue(repoC.Name, out var liveC))
+            {
+                changes.Add(new UniqueConstraintChange
+                {
+                    Kind           = UniqueConstraintChangeKind.Removed,
+                    ConstraintName = repoC.Name,
+                    OldColumns     = string.Join(", ", repoC.Columns),
+                });
+            }
+            else
+            {
+                var repoColKey = string.Join(",", repoC.Columns.Select(c => c.ToLowerInvariant()));
+                var liveColKey = string.Join(",", liveC.Columns.Select(c => c.ToLowerInvariant()));
+                if (repoColKey != liveColKey)
+                    changes.Add(new UniqueConstraintChange
+                    {
+                        Kind           = UniqueConstraintChangeKind.ColumnsChanged,
+                        ConstraintName = repoC.Name,
+                        OldColumns     = string.Join(", ", repoC.Columns),
+                        NewColumns     = string.Join(", ", liveC.Columns),
+                    });
+            }
+        }
+
+        foreach (var liveC in live.UniqueConstraints)
+        {
+            if (!repoByName.ContainsKey(liveC.Name))
+                changes.Add(new UniqueConstraintChange
+                {
+                    Kind           = UniqueConstraintChangeKind.Added,
+                    ConstraintName = liveC.Name,
+                    NewColumns     = string.Join(", ", liveC.Columns),
+                });
+        }
+
+        return changes;
     }
 }

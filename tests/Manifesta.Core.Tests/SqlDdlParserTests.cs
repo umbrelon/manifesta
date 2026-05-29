@@ -1208,6 +1208,122 @@ public sealed class SqlDdlParserTests
         r.Tables[0].Fields[5].Type.Should().Be("uniqueidentifier");
     }
 
+    // ── time / datetimeoffset implicit precision normalisation ─────────────────
+
+    [Fact]
+    public void SqlServer_TimeBareType_NormalisedToTime7()
+    {
+        // SQL Server default precision for time is 7; bare 'time' in DDL must
+        // normalise to 'time(7)' so it matches what sys.columns returns via
+        // live introspection — eliminating false drift on columns like Shift.StartTime.
+        const string sql = """
+            CREATE TABLE [dbo].[Shift] (
+                [ShiftID]   [tinyint]  IDENTITY(1,1) NOT NULL,
+                [Name]      [nvarchar](50) NOT NULL,
+                [StartTime] [time]     NOT NULL,
+                [EndTime]   [time]     NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var fields = r.Tables[0].Fields;
+        fields.Single(f => f.Name == "StartTime").Type.Should().Be("time(7)");
+        fields.Single(f => f.Name == "EndTime")  .Type.Should().Be("time(7)");
+    }
+
+    [Fact]
+    public void SqlServer_TimeExplicitPrecision_PreservedAsIs()
+    {
+        // Explicit precision must not be double-decorated.
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [a] [time](0) NOT NULL,
+                [b] [time](3) NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Tables[0].Fields[0].Type.Should().Be("time(0)");
+        r.Tables[0].Fields[1].Type.Should().Be("time(3)");
+    }
+
+    [Fact]
+    public void SqlServer_DatetimeoffsetBareType_NormalisedToDatetimeoffset7()
+    {
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [ts] [datetimeoffset] NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Tables[0].Fields[0].Type.Should().Be("datetimeoffset(7)");
+    }
+
+    // ── Computed column expression capture ────────────────────────────────────
+
+    [Fact]
+    public void SqlServer_ComputedColumn_MethodCallOnHierarchyid_ExpressionCaptured()
+    {
+        // Reproduces the AdventureWorks pattern:
+        //   [OrganizationLevel] AS [OrganizationNode].[GetLevel]()
+        // The expression is NOT parenthesised at the top level; the parser must
+        // collect all tokens until a modifier keyword and reconstruct the expression.
+        const string sql = """
+            CREATE TABLE [HumanResources].[Employee] (
+                [BusinessEntityID]  [int]         NOT NULL,
+                [OrganizationNode]  [hierarchyid] NULL,
+                [OrganizationLevel] AS [OrganizationNode].[GetLevel]()
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var f = r.Tables[0].Fields.Single(x => x.Name == "OrganizationLevel");
+        f.IsComputed.Should().BeTrue();
+        f.ComputedExpression.Should().NotBeNullOrEmpty();
+        f.ComputedExpression.Should().Contain("OrganizationNode");
+        f.ComputedExpression.Should().Contain("GetLevel");
+    }
+
+    [Fact]
+    public void SqlServer_ComputedColumn_ParenthesisedExpression_StillCaptured()
+    {
+        // Parenthesised form must still work after the refactor — this is the
+        // existing path: AS ([first_name] + ' ' + [last_name])
+        const string sql = """
+            CREATE TABLE [dbo].[t] (
+                [first_name] [nvarchar](50) NOT NULL,
+                [last_name]  [nvarchar](50) NOT NULL,
+                [full_name]  AS ([first_name] + ' ' + [last_name]) PERSISTED
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var f = r.Tables[0].Fields.Single(x => x.Name == "full_name");
+        f.IsComputed.Should().BeTrue();
+        f.ComputedExpression.Should().Be("[first_name] + ' ' + [last_name]");
+        f.IsPersisted.Should().BeTrue();
+    }
+
+    [Fact]
+    public void SqlServer_ComputedColumn_UdfReference_ExpressionCaptured()
+    {
+        // AS ISNULL('AW' + [dbo].[ufnLeadingZeros](CustomerID), '') — top-level
+        // token is ISNULL which is not parenthesised directly.
+        const string sql = """
+            CREATE TABLE [Sales].[Customer] (
+                [CustomerID]    [int]        IDENTITY(1,1) NOT NULL,
+                [AccountNumber] AS ISNULL(N'AW' + [dbo].[ufnLeadingZeros]([CustomerID]), N'*** ERROR ***') NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var f = r.Tables[0].Fields.Single(x => x.Name == "AccountNumber");
+        f.IsComputed.Should().BeTrue();
+        f.ComputedExpression.Should().NotBeNullOrEmpty();
+        f.ComputedExpression.Should().Contain("ufnLeadingZeros");
+    }
+
     [Fact]
     public void SqlServer_IdentityColumn_ImpliedNotNull()
     {
@@ -1489,5 +1605,66 @@ public sealed class SqlDdlParserTests
         var tokens = SqlDdlParser.Tokenize("DEFAULT N'hello'");
         tokens.Should().HaveCount(2);
         tokens[1].Should().Be("N'hello'");
+    }
+
+    // ── SQL Server PERIOD FOR SYSTEM_TIME (temporal tables) ───────────────────
+
+    [Fact]
+    public void SqlServer_TemporalTable_PeriodClause_NoPhantomColumn()
+    {
+        // Regression guard: PERIOD FOR SYSTEM_TIME (...) was parsed as a phantom
+        // column named "PERIOD" because PERIOD is not in IsConstraintTypeKeyword.
+        // The two hidden system-period columns and the PERIOD clause must be
+        // silently consumed; no "PERIOD" field must appear in the output.
+        const string sql = """
+            CREATE TABLE [dbo].[Temporal] (
+                [Id]        [int]       IDENTITY(1,1) NOT NULL,
+                [Name]      [nvarchar](100)            NOT NULL,
+                [ValidFrom] [datetime2] GENERATED ALWAYS AS ROW START HIDDEN NOT NULL,
+                [ValidTo]   [datetime2] GENERATED ALWAYS AS ROW END   HIDDEN NOT NULL,
+                PERIOD FOR SYSTEM_TIME ([ValidFrom], [ValidTo])
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+
+        r.Tables.Should().ContainSingle();
+        var t = r.Tables[0];
+
+        // Must NOT have a phantom "PERIOD" column
+        t.Fields.Should().NotContain(f => f.Name == "PERIOD",
+            "PERIOD FOR SYSTEM_TIME is a temporal clause, not a column definition");
+
+        // Real columns must be present
+        t.Fields.Should().Contain(f => f.Name == "Id");
+        t.Fields.Should().Contain(f => f.Name == "Name");
+        t.Fields.Should().Contain(f => f.Name == "ValidFrom");
+        t.Fields.Should().Contain(f => f.Name == "ValidTo");
+
+        // System-time columns are datetime2 NOT NULL (HIDDEN is a SQL Server modifier, not type)
+        var validFrom = t.Fields.First(f => f.Name == "ValidFrom");
+        validFrom.Type.Should().StartWith("datetime2", "GENERATED ALWAYS AS ROW START is a datetime2 column");
+        validFrom.Nullable.Should().BeFalse("system-time columns are NOT NULL");
+    }
+
+    [Fact]
+    public void SqlServer_TemporalTable_PeriodClause_ExactFieldCount()
+    {
+        // Secondary guard: the table must have exactly 4 fields (Id, Name, ValidFrom, ValidTo).
+        // Any phantom field would inflate the count.
+        const string sql = """
+            CREATE TABLE [dbo].[Temporal] (
+                [Id]        [int]       IDENTITY(1,1) NOT NULL,
+                [Name]      [nvarchar](100)            NOT NULL,
+                [ValidFrom] [datetime2] GENERATED ALWAYS AS ROW START HIDDEN NOT NULL,
+                [ValidTo]   [datetime2] GENERATED ALWAYS AS ROW END   HIDDEN NOT NULL,
+                PERIOD FOR SYSTEM_TIME ([ValidFrom], [ValidTo])
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+
+        r.Tables[0].Fields.Should().HaveCount(4,
+            "exactly Id, Name, ValidFrom, ValidTo — no phantom PERIOD column");
     }
 }

@@ -47,6 +47,38 @@ public sealed record IndexChange
     public bool? NewIsUnique { get; init; }
 }
 
+// ─── Check constraint changes ─────────────────────────────────────────────────
+
+public enum CheckConstraintChangeKind { Added, Removed, ExpressionChanged }
+
+public sealed record CheckConstraintChange
+{
+    public required CheckConstraintChangeKind Kind           { get; init; }
+    public required string                    ConstraintName { get; init; }
+
+    /// <summary>Expression before the change (null for Added).</summary>
+    public string? OldExpression { get; init; }
+
+    /// <summary>Expression after the change (null for Removed).</summary>
+    public string? NewExpression { get; init; }
+}
+
+// ─── Unique constraint changes ────────────────────────────────────────────────
+
+public enum UniqueConstraintChangeKind { Added, Removed, ColumnsChanged }
+
+public sealed record UniqueConstraintChange
+{
+    public required UniqueConstraintChangeKind Kind           { get; init; }
+    public required string                     ConstraintName { get; init; }
+
+    /// <summary>Comma-joined columns before the change (null for Added).</summary>
+    public string? OldColumns { get; init; }
+
+    /// <summary>Comma-joined columns after the change (null for Removed).</summary>
+    public string? NewColumns { get; init; }
+}
+
 // ─── Per-table drift result ───────────────────────────────────────────────────
 
 /// <summary>
@@ -75,7 +107,15 @@ public sealed record DriftResult
     /// <summary>Index-level changes detected by comparing repo and live index definitions.</summary>
     public IReadOnlyList<IndexChange> IndexChanges { get; init; } = [];
 
-    public bool HasDrift    => FieldChanges.Count > 0 || FkChanges.Count > 0 || PrimaryKeyChange is not null || DataChanges.Count > 0 || IndexChanges.Count > 0;
+    /// <summary>Check constraint changes detected by comparing repo and live constraint definitions.</summary>
+    public IReadOnlyList<CheckConstraintChange> CheckConstraintChanges { get; init; } = [];
+
+    /// <summary>Unique constraint changes detected by comparing repo and live constraint definitions.</summary>
+    public IReadOnlyList<UniqueConstraintChange> UniqueConstraintChanges { get; init; } = [];
+
+    public bool HasDrift    => FieldChanges.Count > 0 || FkChanges.Count > 0 || PrimaryKeyChange is not null
+                            || DataChanges.Count > 0 || IndexChanges.Count > 0
+                            || CheckConstraintChanges.Count > 0 || UniqueConstraintChanges.Count > 0;
     public bool HasWarnings => ExtraDbColumns.Count > 0;
 }
 

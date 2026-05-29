@@ -68,14 +68,16 @@ public sealed class TableMerger
 
         return new MergeResult
         {
-            Merged            = merged,
-            RepoFilePath      = repoFilePath,
-            FieldChanges      = fieldChanges.AsReadOnly(),
-            FkChanges         = fkChanges.AsReadOnly(),
-            PrimaryKeyChange  = pkChange,
-            OrphanColumnNames = orphanColumnNames.AsReadOnly(),
-            OrphanedDataKeys  = orphanedDataKeys.AsReadOnly(),
-            IndexesChanged    = IndexesStructurallyDiffer(repo.Indexes, live.Indexes),
+            Merged                  = merged,
+            RepoFilePath            = repoFilePath,
+            FieldChanges            = fieldChanges.AsReadOnly(),
+            FkChanges               = fkChanges.AsReadOnly(),
+            PrimaryKeyChange        = pkChange,
+            OrphanColumnNames       = orphanColumnNames.AsReadOnly(),
+            OrphanedDataKeys        = orphanedDataKeys.AsReadOnly(),
+            IndexesChanged          = IndexesStructurallyDiffer(repo.Indexes, live.Indexes),
+            CheckConstraintsChanged = CheckConstraintsStructurallyDiffer(repo.CheckConstraints, live.CheckConstraints),
+            UniqueConstraintsChanged = UniqueConstraintsStructurallyDiffer(repo.UniqueConstraints, live.UniqueConstraints),
             // NonSoftFkRemovedWarnings always empty: Physical FK removals are now in FkChanges.
         };
     }
@@ -107,6 +109,44 @@ public sealed class TableMerger
                 return true;
 
             if (!repoIdx.Columns.SequenceEqual(liveIdx.Columns, StringComparer.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    // ── Constraint comparison helpers ─────────────────────────────────────────
+
+    private static bool CheckConstraintsStructurallyDiffer(
+        IReadOnlyList<CheckConstraint> repo,
+        IReadOnlyList<CheckConstraint> live)
+    {
+        if (repo.Count != live.Count) return true;
+
+        var repoByName = repo.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+        foreach (var liveC in live)
+        {
+            if (!repoByName.TryGetValue(liveC.Name, out var repoC))
+                return true;
+            if (!string.Equals(repoC.Expression, liveC.Expression, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool UniqueConstraintsStructurallyDiffer(
+        IReadOnlyList<UniqueConstraint> repo,
+        IReadOnlyList<UniqueConstraint> live)
+    {
+        if (repo.Count != live.Count) return true;
+
+        var repoByName = repo.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+        foreach (var liveC in live)
+        {
+            if (!repoByName.TryGetValue(liveC.Name, out var repoC))
+                return true;
+            if (!repoC.Columns.SequenceEqual(liveC.Columns, StringComparer.OrdinalIgnoreCase))
                 return true;
         }
 

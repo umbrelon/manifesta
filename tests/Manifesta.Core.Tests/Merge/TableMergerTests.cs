@@ -893,4 +893,103 @@ public class TableMergerTests
         result.IndexesChanged.Should().BeTrue();
         result.HasChanges.Should().BeTrue("index change must count as a structural change");
     }
+
+    // ── Check constraint merge ────────────────────────────────────────────────
+
+    private static CheckConstraint Check(string name, string expr) =>
+        new() { Name = name, Expression = expr };
+
+    private static TableDefinition TableWithCheckConstraints(IEnumerable<CheckConstraint> checks) =>
+        new()
+        {
+            Name             = "dbo.Order",
+            Fields           = [Field("Id", "int", isPk: true), Field("Amount", "decimal(18,2)")],
+            PrimaryKey       = ["Id"],
+            ForeignKeys      = [],
+            CheckConstraints = checks.ToList().AsReadOnly(),
+        };
+
+    [Fact]
+    public void Merge_IdenticalCheckConstraints_CheckConstraintsChangedFalse()
+    {
+        var repo = TableWithCheckConstraints([Check("CK_Amount", "Amount > 0")]);
+        var live = TableWithCheckConstraints([Check("CK_Amount", "Amount > 0")]);
+
+        var result = _merger.Merge(repo, live, RepoPath);
+
+        result.CheckConstraintsChanged.Should().BeFalse();
+        result.HasChanges.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Merge_NoColumnOrFkChanges_ButCheckConstraintAdded_IsCountedAsModified()
+    {
+        // Regression guard: a table with only check constraint drift must land in "modified",
+        // not "unchanged" — verifies HasChanges includes CheckConstraintsChanged.
+        var repo = TableWithCheckConstraints([]);
+        var live = TableWithCheckConstraints([Check("CK_Amount_Positive", "Amount > 0")]);
+
+        var result = _merger.Merge(repo, live, RepoPath);
+
+        result.FieldChanges.Should().BeEmpty("no column changes");
+        result.FkChanges.Should().BeEmpty("no FK changes");
+        result.PrimaryKeyChange.Should().BeNull("no PK changes");
+        result.CheckConstraintsChanged.Should().BeTrue();
+        result.HasChanges.Should().BeTrue("check constraint change must count as a structural change");
+    }
+
+    [Fact]
+    public void Merge_CheckConstraintExpressionChanged_IsCountedAsModified()
+    {
+        var repo = TableWithCheckConstraints([Check("CK_Amount", "Amount > 0")]);
+        var live = TableWithCheckConstraints([Check("CK_Amount", "Amount >= 0")]);
+
+        var result = _merger.Merge(repo, live, RepoPath);
+
+        result.CheckConstraintsChanged.Should().BeTrue();
+        result.HasChanges.Should().BeTrue();
+    }
+
+    // ── Unique constraint merge ───────────────────────────────────────────────
+
+    private static UniqueConstraint Unique(string name, params string[] columns) =>
+        new() { Name = name, Columns = columns.ToList().AsReadOnly() };
+
+    private static TableDefinition TableWithUniqueConstraints(IEnumerable<UniqueConstraint> uniques) =>
+        new()
+        {
+            Name              = "dbo.Order",
+            Fields            = [Field("Id", "int", isPk: true), Field("Code", "nvarchar(50)")],
+            PrimaryKey        = ["Id"],
+            ForeignKeys       = [],
+            UniqueConstraints = uniques.ToList().AsReadOnly(),
+        };
+
+    [Fact]
+    public void Merge_IdenticalUniqueConstraints_UniqueConstraintsChangedFalse()
+    {
+        var repo = TableWithUniqueConstraints([Unique("UQ_Code", "Code")]);
+        var live = TableWithUniqueConstraints([Unique("UQ_Code", "Code")]);
+
+        var result = _merger.Merge(repo, live, RepoPath);
+
+        result.UniqueConstraintsChanged.Should().BeFalse();
+        result.HasChanges.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Merge_NoColumnOrFkChanges_ButUniqueConstraintAdded_IsCountedAsModified()
+    {
+        // Regression guard: a table with only unique constraint drift must land in "modified".
+        var repo = TableWithUniqueConstraints([]);
+        var live = TableWithUniqueConstraints([Unique("UQ_Order_Code", "Code")]);
+
+        var result = _merger.Merge(repo, live, RepoPath);
+
+        result.FieldChanges.Should().BeEmpty("no column changes");
+        result.FkChanges.Should().BeEmpty("no FK changes");
+        result.PrimaryKeyChange.Should().BeNull("no PK changes");
+        result.UniqueConstraintsChanged.Should().BeTrue();
+        result.HasChanges.Should().BeTrue("unique constraint change must count as a structural change");
+    }
 }

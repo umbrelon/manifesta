@@ -300,7 +300,12 @@ public sealed class InitSqlCommand : ManifestCommandBase
         }
 
         // ── Scaffold _/manifesta.config.json and _/document-sections/all-tables.json ──
-        var resolvedOutputDir = Path.GetFullPath(outputDir);
+        // Strip any trailing directory separator before computing the parent.  Without this,
+        // a path ending in '/' (e.g. "--output-dir ./manifesta/tables/") resolves to the
+        // output directory itself instead of its parent, placing the config scaffold inside
+        // the tables directory instead of alongside it.
+        var resolvedOutputDir = Path.GetFullPath(outputDir)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var configRoot        = Path.GetDirectoryName(resolvedOutputDir) ?? resolvedOutputDir;
         var configDir         = Path.Combine(configRoot, "_");
 
