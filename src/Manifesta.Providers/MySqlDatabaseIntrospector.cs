@@ -36,7 +36,7 @@ public sealed class MySqlDatabaseIntrospector : DatabaseIntrospectorBase
         while (await reader.ReadAsync(ct))
         {
             var tableName = reader.GetString(0);
-            var rowCount  = Convert.ToInt32(reader.GetValue(1));
+            var rowCount  = (int)Math.Min(Convert.ToInt64(reader.GetValue(1)), int.MaxValue);
             result[tableName] = rowCount;
         }
 
@@ -108,7 +108,7 @@ public sealed class MySqlDatabaseIntrospector : DatabaseIntrospectorBase
             var tableName        = reader.GetString(0);
             var columnName       = reader.GetString(1);
             var dataType         = reader.GetString(2);
-            var charMaxLength    = reader.IsDBNull(3) ? (int?)null : Convert.ToInt32(reader.GetValue(3));
+            var charMaxLength    = reader.IsDBNull(3) ? (int?)null : (int)Math.Min(Convert.ToInt64(reader.GetValue(3)), int.MaxValue);
             var numericPrecision = reader.IsDBNull(4) ? (int?)null : Convert.ToInt32(reader.GetValue(4));
             var numericScale     = reader.IsDBNull(5) ? (int?)null : Convert.ToInt32(reader.GetValue(5));
             var isNullable       = Convert.ToBoolean(reader.GetValue(6));

@@ -83,10 +83,19 @@ public class MySqlTestFixture : IAsyncLifetime
             );
 
             CREATE TABLE Settings (
-                SettingId    INT          AUTO_INCREMENT PRIMARY KEY,
-                SettingKey   VARCHAR(100) NOT NULL UNIQUE,
-                SettingValue TEXT         NULL,
-                CreatedDate  DATETIME     DEFAULT NOW()
+                SettingId    INT              AUTO_INCREMENT PRIMARY KEY,
+                SettingKey   VARCHAR(100)     NOT NULL UNIQUE,
+                SettingValue TEXT             NULL,
+                CreatedDate  DATETIME         DEFAULT NOW()
+            );
+
+            -- LargeTypes exercises ulong overflow fixes in the introspector:
+            --   LONGTEXT  → CHARACTER_MAXIMUM_LENGTH = 4294967295 (overflows Int32)
+            --   BIGINT UNSIGNED → can hold values > Int32.MaxValue
+            CREATE TABLE LargeTypes (
+                Id          BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+                Content     LONGTEXT         NULL,
+                BigValue    BIGINT UNSIGNED  NOT NULL DEFAULT 0
             );
 
             -- Non-unique regular index (also exercises that PK is excluded)

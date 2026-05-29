@@ -275,6 +275,35 @@ public class MySqlDatabaseIntrospectorTests
         chk.Column.Should().BeNull();
     }
 
+    // ── ulong overflow regression (bigint unsigned / longtext) ────────────────
+
+    [Fact]
+    public async Task IntrospectAsync_LongtextColumn_DoesNotThrowOverflow()
+    {
+        // LONGTEXT reports CHARACTER_MAXIMUM_LENGTH = 4294967295 from information_schema,
+        // which overflows Int32. The introspector must use Int64 for that column.
+        var introspector = new MySqlDatabaseIntrospector(_fixture.ConnectionString);
+
+        var tables = await introspector.IntrospectAsync();
+
+        var largeTypes = tables.Single(t => t.Name == "LargeTypes");
+        largeTypes.Fields.Should().Contain(f => f.Name == "Content" && f.Type == "longtext");
+    }
+
+    [Fact]
+    public async Task GetRowCountsAsync_BigintUnsignedTable_DoesNotThrowOverflow()
+    {
+        // table_rows in information_schema is returned as ulong by MySqlConnector.
+        // Convert.ToInt32 on a large ulong throws; the fix clamps to int.MaxValue.
+        var introspector = new MySqlDatabaseIntrospector(_fixture.ConnectionString);
+
+        var act = async () => await introspector.GetRowCountsAsync();
+
+        await act.Should().NotThrowAsync();
+        var counts = await introspector.GetRowCountsAsync();
+        counts.Should().ContainKey("LargeTypes");
+    }
+
     // ── Unique constraints ─────────────────────────────────────────────────────
 
     [Fact]
