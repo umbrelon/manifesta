@@ -1035,6 +1035,106 @@ public sealed class CliSmokeTests
         return root;
     }
 
+    [Fact]
+    public async Task InitSql_CreatesConfigAndSectionFile()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, "schema.sql"), """
+                CREATE TABLE Actor   (Id INT NOT NULL PRIMARY KEY);
+                CREATE TABLE Address (Id INT NOT NULL PRIMARY KEY);
+                """);
+
+            var tablesDir = Path.Combine(tmp, "manifesta", "tables");
+            var (code, _, stderr) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",      "schema.sql",
+                "--output-dir", tablesDir,
+                "--provider",   "mysql");
+
+            code.Should().Be(0, because: stderr);
+
+            // Tables written to --output-dir
+            Directory.GetFiles(tablesDir, "*.json").Should().HaveCount(2);
+
+            // Config scaffolded in the parent's _/ directory
+            var configPath  = Path.Combine(tmp, "manifesta", "_", "manifesta.config.json");
+            var sectionPath = Path.Combine(tmp, "manifesta", "_", "document-sections", "all-tables.json");
+
+            File.Exists(configPath).Should().BeTrue("manifesta.config.json should be created automatically");
+            File.Exists(sectionPath).Should().BeTrue("all-tables.json should be created automatically");
+
+            var config  = await File.ReadAllTextAsync(configPath);
+            config.Should().Contain("\"root\"").And.Contain("\"../\"");
+
+            var section = await File.ReadAllTextAsync(sectionPath);
+            section.Should().Contain("Actor").And.Contain("Address");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_DefaultOutputDir_CreatesConfigInCurrentDirectory()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, "schema.sql"),
+                "CREATE TABLE Widget (Id INT NOT NULL PRIMARY KEY);");
+
+            // --output-dir defaults to ./tables, so config root is ./  (i.e. tmp)
+            var (code, _, stderr) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",    "schema.sql",
+                "--provider", "mysql");
+
+            code.Should().Be(0, because: stderr);
+
+            var configPath = Path.Combine(tmp, "_", "manifesta.config.json");
+            File.Exists(configPath).Should().BeTrue("config should land in the current directory's _/ folder");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_ExistingConfig_NotOverwrittenWithoutFlag()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, "schema.sql"),
+                "CREATE TABLE Widget (Id INT NOT NULL PRIMARY KEY);");
+
+            // Run once to create config
+            await RunAsync(tmp, "init", "sql", "--input", "schema.sql", "--provider", "mysql");
+
+            var configPath = Path.Combine(tmp, "_", "manifesta.config.json");
+            File.Exists(configPath).Should().BeTrue();
+
+            // Overwrite with known sentinel content
+            await File.WriteAllTextAsync(configPath, "{\"sentinel\":true}");
+
+            // Run again WITHOUT --overwrite — config must not be touched
+            var (code, _, stderr) = await RunAsync(tmp, "init", "sql", "--input", "schema.sql",
+                "--provider", "mysql", "--overwrite");
+            code.Should().Be(0, because: stderr);
+
+            // Now run without --overwrite — sentinel should be preserved
+            await File.WriteAllTextAsync(configPath, "{\"sentinel\":true}");
+            await RunAsync(tmp, "init", "sql", "--input", "schema.sql", "--provider", "mysql");
+            var content = await File.ReadAllTextAsync(configPath);
+            content.Should().Contain("sentinel");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
     // ── init sql --default-schema ────────────────────────────────────────────
 
     [Fact]

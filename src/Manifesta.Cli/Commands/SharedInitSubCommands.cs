@@ -299,12 +299,65 @@ public sealed class InitSqlCommand : ManifestCommandBase
             }
         }
 
+        // ── Scaffold _/manifesta.config.json and _/document-sections/all-tables.json ──
+        var resolvedOutputDir = Path.GetFullPath(outputDir);
+        var configRoot        = Path.GetDirectoryName(resolvedOutputDir) ?? resolvedOutputDir;
+        var configDir         = Path.Combine(configRoot, "_");
+
+        if (!globals.DryRun)
+        {
+            try { Directory.CreateDirectory(configDir); }
+            catch (Exception ex) { throw new ManifestaConfigException($"Failed to create config directory: {ex.Message}"); }
+        }
+
+        var jsonOpts = new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+        var configPath = Path.Combine(configDir, "manifesta.config.json");
+        if (!File.Exists(configPath) || overwrite)
+        {
+            var configObj  = new { paths = new { root = "../", skip = new[] { "_" } } };
+            var configJson = JsonSerializer.Serialize(configObj, jsonOpts);
+            try { await writer.WriteAsync(configPath, configJson, ct); }
+            catch (Exception ex) { throw new ManifestaSchemException($"Failed to write {configPath}: {ex.Message}"); }
+            OutputFormatter.WriteVerbose("Generated config: _/manifesta.config.json", globals);
+        }
+        else
+        {
+            OutputFormatter.WriteVerbose("Skipped config (already exists): _/manifesta.config.json", globals);
+        }
+
+        var docSectionsDir = Path.Combine(configDir, "document-sections");
+        if (!globals.DryRun)
+        {
+            try { Directory.CreateDirectory(docSectionsDir); }
+            catch (Exception ex) { throw new ManifestaConfigException($"Failed to create document-sections directory: {ex.Message}"); }
+        }
+
+        var sectionPath = Path.Combine(docSectionsDir, "all-tables.json");
+        if (!File.Exists(sectionPath) || overwrite)
+        {
+            var sectionDef  = new
+            {
+                name        = "All Tables",
+                description = "Auto-generated section containing all database tables",
+                tables      = allTables.Select(t => t.Name).OrderBy(n => n).ToList()
+            };
+            var sectionJson = JsonSerializer.Serialize(sectionDef, jsonOpts);
+            try { await writer.WriteAsync(sectionPath, sectionJson, ct); }
+            catch (Exception ex) { throw new ManifestaSchemException($"Failed to write {sectionPath}: {ex.Message}"); }
+            OutputFormatter.WriteVerbose("Generated section: _/document-sections/all-tables.json", globals);
+        }
+        else
+        {
+            OutputFormatter.WriteVerbose("Skipped section (already exists): _/document-sections/all-tables.json", globals);
+        }
+
         OutputFormatter.WriteLine(
             $"Imported {written} table(s) from SQL DDL" +
             (skipped       > 0 ? $", {skipped} skipped (already exist)" : "") +
             (filesWithDups > 0 ? $", {filesWithDups} file(s) skipped (intra-file duplicate tables — see warnings)" : "") +
             (failed        > 0 ? $", {failed} failed" : "") +
-            $" into {outputDir}",
+            $" into {outputDir} — registry initialized at {configRoot}",
             globals);
 
         if (failed > 0)
