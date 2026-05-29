@@ -40,13 +40,13 @@ internal static class FieldComparison
         // Remove spaces inside precision/scale: decimal(18, 0) → decimal(18,0)
         s = s_precisionSpaceRx.Replace(s, "($1,$2)");
 
-        // SQL Server: expand bare aliases and default precisions
-        if (provider == DbProvider.SqlServer)
+        // Dialect-specific normalisation
+        s = provider switch
         {
-            if (s == "sysname")   return "nvarchar(128)";
-            if (s == "integer")   return "int";
-            if (s == "datetime2") return "datetime2(7)";
-        }
+            DbProvider.SqlServer => SqlServerComparisonNormalizer.NormalizeType(s),
+            DbProvider.MySql     => MySqlComparisonNormalizer.NormalizeType(s),
+            _                    => s,
+        };
 
         return s;
     }

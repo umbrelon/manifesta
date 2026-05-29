@@ -89,6 +89,50 @@ public class TableDifferTests
         result.HasDrift.Should().BeTrue();
     }
 
+    // ── MySQL type-alias normalisation (no false drift) ───────────────────────
+
+    [Theory]
+    [InlineData("tinyint(1)",  "tinyint")]   // boolean convention — live DB drops display width
+    [InlineData("tinyint",     "tinyint(1)")]
+    [InlineData("int(11)",     "int")]
+    [InlineData("int",         "int(11)")]
+    [InlineData("bigint(20)",  "bigint")]
+    [InlineData("smallint(6)", "smallint")]
+    [InlineData("integer",     "int")]
+    [InlineData("integer(10)", "int")]
+    public void Diff_MySqlTypeAliases_NoDrift(string repoType, string liveType)
+    {
+        var repo = Table(fields: [Field("Col", repoType)]);
+        var live = Table(fields: [Field("Col", liveType)]);
+
+        var result = _differ.Diff(repo, live, RepoPath, DbProvider.MySql);
+
+        result.HasDrift.Should().BeFalse($"'{repoType}' and '{liveType}' are equivalent MySQL types");
+    }
+
+    [Fact]
+    public void Diff_MySqlTypeAlias_StillDriftsForDifferentProviders()
+    {
+        var repo = Table(fields: [Field("Active", "tinyint(1)")]);
+        var live = Table(fields: [Field("Active", "tinyint")]);
+
+        // Without MySQL provider context, tinyint(1) vs tinyint is a real drift
+        var result = _differ.Diff(repo, live, RepoPath, DbProvider.SqlServer);
+
+        result.HasDrift.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Diff_MySqlRealTypeDifference_StillDrifts()
+    {
+        var repo = Table(fields: [Field("Active", "tinyint")]);
+        var live = Table(fields: [Field("Active", "int")]);
+
+        var result = _differ.Diff(repo, live, RepoPath, DbProvider.MySql);
+
+        result.HasDrift.Should().BeTrue();
+    }
+
     [Fact]
     public void Diff_ColumnNullabilityChanged_RecordedAsDrift()
     {
