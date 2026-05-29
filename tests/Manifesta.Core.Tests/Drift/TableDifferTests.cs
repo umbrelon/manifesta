@@ -601,6 +601,22 @@ public class TableDifferTests
             c.Kind == FieldChangeKind.ComputedExpressionChanged && c.FieldName == "FullName");
     }
 
+    [Fact]
+    public void Diff_NonComputedField_BothSidesNullExpression_NoDrift()
+    {
+        // Regression: MySQL returns an empty string (not NULL) for generation_expression
+        // on non-computed columns.  Before the introspector fix, the live side would
+        // carry ComputedExpression = "" while the DDL-parsed repo side had null, causing
+        // every regular column to show as drifted.  After the fix both sides produce null.
+        var repo = Table(fields: [Field("Id"), Field("Name", "varchar(50)")]);
+        var live = Table(fields: [Field("Id"), Field("Name", "varchar(50)")]);
+
+        var result = _differ.Diff(repo, live, RepoPath);
+
+        result.HasDrift.Should().BeFalse();
+        result.FieldChanges.Should().NotContain(c => c.Kind == FieldChangeKind.ComputedExpressionChanged);
+    }
+
     // ── Index drift ───────────────────────────────────────────────────────────
 
     [Fact]

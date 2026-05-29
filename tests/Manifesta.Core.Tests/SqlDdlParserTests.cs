@@ -566,6 +566,49 @@ public sealed class SqlDdlParserTests
     }
 
     [Fact]
+    public void MySQL_SpatialKey_SkippedNotParsedAsColumn()
+    {
+        // SPATIAL KEY is a MySQL index-type qualifier.  The parser must treat it
+        // as an inline index (silently skipped) rather than a column named "SPATIAL".
+        const string sql = """
+            CREATE TABLE `address` (
+                `address_id` smallint unsigned NOT NULL AUTO_INCREMENT,
+                `location`   geometry NOT NULL,
+                PRIMARY KEY (`address_id`),
+                SPATIAL KEY `idx_location` (`location`)
+            ) ENGINE=InnoDB;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.MySql);
+        r.Tables.Should().HaveCount(1);
+        r.Errors.Should().BeEmpty();
+        r.Tables[0].Fields.Should().HaveCount(2);
+        r.Tables[0].Fields.Should().NotContain(f => f.Name == "SPATIAL");
+    }
+
+    [Fact]
+    public void MySQL_FulltextKey_SkippedNotParsedAsColumn()
+    {
+        // FULLTEXT KEY is a MySQL index-type qualifier.  The parser must treat it
+        // as an inline index (silently skipped) rather than a column named "FULLTEXT".
+        const string sql = """
+            CREATE TABLE `film_text` (
+                `film_id`     smallint NOT NULL,
+                `title`       varchar(255) NOT NULL,
+                `description` text,
+                PRIMARY KEY (`film_id`),
+                FULLTEXT KEY `idx_title_description` (`title`,`description`)
+            ) ENGINE=InnoDB;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.MySql);
+        r.Tables.Should().HaveCount(1);
+        r.Errors.Should().BeEmpty();
+        r.Tables[0].Fields.Should().HaveCount(3);
+        r.Tables[0].Fields.Should().NotContain(f => f.Name == "FULLTEXT");
+    }
+
+    [Fact]
     public void MySQL_ComputedColumn_Parsed()
     {
         const string sql = """

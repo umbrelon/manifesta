@@ -215,11 +215,15 @@ public sealed class MySqlDatabaseIntrospector : DatabaseIntrospectorBase
         MySqlConnection connection,
         CancellationToken ct)
     {
+        // MySQL returns an empty string (not NULL) for generation_expression on
+        // non-generated columns, so we must filter out '' as well as NULL to avoid
+        // treating every regular column as a computed column with an empty expression.
         const string sql = @"
             SELECT table_name, column_name, generation_expression, extra
             FROM information_schema.columns
-            WHERE table_schema      = DATABASE()
+            WHERE table_schema         = DATABASE()
               AND generation_expression IS NOT NULL
+              AND generation_expression <> ''
             ORDER BY table_name, ordinal_position";
 
         using var command = new MySqlCommand(sql, connection);

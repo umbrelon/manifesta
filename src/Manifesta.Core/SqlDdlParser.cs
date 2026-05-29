@@ -426,7 +426,18 @@ public sealed class SqlDdlParser
                 idx++; // skip name
         }
 
-        return idx < tokens.Count && IsConstraintTypeKeyword(tokens[idx]);
+        if (idx >= tokens.Count) return false;
+
+        // MySQL SPATIAL KEY / SPATIAL INDEX and FULLTEXT KEY / FULLTEXT INDEX
+        // are index-type qualifiers, not column definitions.  Treat them as
+        // constraint entries so they are routed to ParseConstraintEntry and
+        // silently skipped (like any other inline KEY/INDEX in v1), rather than
+        // being misread as a column named "SPATIAL" or "FULLTEXT".
+        if (tokens[idx].Equals("SPATIAL",  StringComparison.OrdinalIgnoreCase) ||
+            tokens[idx].Equals("FULLTEXT", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return IsConstraintTypeKeyword(tokens[idx]);
     }
 
     private static bool IsConstraintTypeKeyword(string t) =>
