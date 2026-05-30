@@ -72,6 +72,12 @@ public sealed record TableDefinition
     public bool IsReferenceTable { get; init; }
 
     /// <summary>
+    /// True when this entry represents a database view rather than a base table.
+    /// Populated by <c>init sql</c> (from <c>CREATE VIEW</c>) and by <c>db merge/export</c>.
+    /// </summary>
+    public bool IsView { get; init; }
+
+    /// <summary>
     /// Field name that holds the human-readable label for this table.
     /// Used by AI description generation and documentation rendering when this table is referenced as a FK target.
     /// Repo-sovereign — never modified by db merge.

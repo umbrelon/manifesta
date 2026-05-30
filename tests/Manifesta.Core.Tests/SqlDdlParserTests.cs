@@ -752,6 +752,45 @@ public sealed class SqlDdlParserTests
     }
 
     [Fact]
+    public void Postgres_BareTimestamp_ExpandsToWithoutTimeZone()
+    {
+        // Regression: DDL "TIMESTAMP" (no qualifier) must normalise to the canonical
+        // PostgreSQL introspector form so that db drift does not flag it as a type change.
+        const string sql = "CREATE TABLE t (ts TIMESTAMP NOT NULL);";
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("timestamp without time zone");
+    }
+
+    [Fact]
+    public void Postgres_BareTime_ExpandsToWithoutTimeZone()
+    {
+        const string sql = "CREATE TABLE t (start_at TIME NOT NULL);";
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("time without time zone");
+    }
+
+    [Fact]
+    public void Postgres_Timestamptz_ExpandsToWithTimeZone()
+    {
+        // TIMESTAMPTZ is a PostgreSQL shorthand alias; introspector returns "timestamp with time zone".
+        const string sql = "CREATE TABLE t (created_at TIMESTAMPTZ NOT NULL);";
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("timestamp with time zone");
+    }
+
+    [Fact]
+    public void Postgres_Timetz_ExpandsToWithTimeZone()
+    {
+        const string sql = "CREATE TABLE t (start_at TIMETZ NOT NULL);";
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("time with time zone");
+    }
+
+    [Fact]
     public void Postgres_GeneratedAlwaysAsIdentity_Stripped()
     {
         const string sql = """
@@ -1487,7 +1526,7 @@ public sealed class SqlDdlParserTests
             ALTER TABLE [dbo].[AccessType] ADD CONSTRAINT [PK_AccessType] PRIMARY KEY CLUSTERED ([Id] ASC);
             """;
 
-        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
         r.PkAdditions.Should().ContainSingle();
         r.PkAdditions[0].TableName.Should().Be("dbo.AccessType");
         r.PkAdditions[0].Columns.Should().ContainSingle().Which.Should().Be("Id");
@@ -1501,7 +1540,7 @@ public sealed class SqlDdlParserTests
             ALTER TABLE [dbo].[t] ADD PRIMARY KEY ([Id]);
             """;
 
-        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
         r.PkAdditions.Should().ContainSingle();
         r.PkAdditions[0].TableName.Should().Be("dbo.t");
         r.PkAdditions[0].Columns.Should().ContainSingle().Which.Should().Be("Id");
@@ -1514,7 +1553,7 @@ public sealed class SqlDdlParserTests
             ALTER TABLE [dbo].[OrderItem] ADD CONSTRAINT [PK_OrderItem] PRIMARY KEY ([OrderId], [LineNo]);
             """;
 
-        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
         r.PkAdditions.Should().ContainSingle();
         r.PkAdditions[0].Columns.Should().BeEquivalentTo(["OrderId", "LineNo"], o => o.WithStrictOrdering());
     }
@@ -1527,7 +1566,7 @@ public sealed class SqlDdlParserTests
             ALTER TABLE AccessType ADD CONSTRAINT PK_AccessType PRIMARY KEY (Id);
             """;
 
-        var r = _parser.Parse(sql, DbProvider.SqlServer, schemaPrefix: "dbo");
+        var r = _parser.Parse(sql, DbProvider.SqlServer, schemaPrefix: "dbo", includeMigrations: true);
         r.PkAdditions.Should().ContainSingle();
         r.PkAdditions[0].TableName.Should().Be("dbo.AccessType");
     }
@@ -1541,7 +1580,8 @@ public sealed class SqlDdlParserTests
                 FOREIGN KEY ([order_id]) REFERENCES [dbo].[order_header] ([id]);
             """;
 
-        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        // PkAdditions is only populated with --include-migrations; even then, FK-only ALTER produces nothing.
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
         r.PkAdditions.Should().BeEmpty();
     }
 
@@ -1558,11 +1598,116 @@ public sealed class SqlDdlParserTests
             ALTER TABLE [dbo].[Widget] ADD CONSTRAINT [PK_Widget] PRIMARY KEY ([Id]);
             """;
 
-        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
         r.Tables.Should().ContainSingle().Which.Name.Should().Be("dbo.Widget");
         r.PkAdditions.Should().ContainSingle();
         r.PkAdditions[0].TableName.Should().Be("dbo.Widget");
         r.PkAdditions[0].Columns.Should().ContainSingle().Which.Should().Be("Id");
+    }
+
+    [Fact]
+    public void SqlServer_AlterTablePk_WithCheckAdd_PkExtracted()
+    {
+        // AdventureWorks-style: WITH CHECK ADD CONSTRAINT … PRIMARY KEY
+        const string sql = """
+            CREATE TABLE [dbo].[AWBuildVersion] ([SystemInformationID] [tinyint] NOT NULL);
+            ALTER TABLE [dbo].[AWBuildVersion] WITH CHECK ADD
+                CONSTRAINT [PK_AWBuildVersion] PRIMARY KEY CLUSTERED ([SystemInformationID] ASC);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
+        r.PkAdditions.Should().ContainSingle(pk =>
+            pk.TableName == "dbo.AWBuildVersion" &&
+            pk.Columns.Contains("SystemInformationID"));
+    }
+
+    [Fact]
+    public void SqlServer_AlterTableFk_WithCheckAdd_FkExtracted()
+    {
+        // AdventureWorks-style: WITH CHECK ADD CONSTRAINT … FOREIGN KEY
+        const string sql = """
+            CREATE TABLE [Person].[Address]     ([AddressID] [int] NOT NULL, [StateProvinceID] [int] NOT NULL);
+            CREATE TABLE [Person].[StateProvince]([StateProvinceID] [int] NOT NULL);
+            ALTER TABLE [Person].[Address] WITH CHECK ADD
+                CONSTRAINT [FK_Address_StateProvince] FOREIGN KEY([StateProvinceID])
+                REFERENCES [Person].[StateProvince] ([StateProvinceID]);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
+        var fkMutation = r.Mutations.Should().ContainSingle(m =>
+            m.Kind == SqlDdlParser.AlterTableMutationKind.AddForeignKey).Which;
+        fkMutation.TableName.Should().Be("Person.Address");
+        fkMutation.Fk!.SourceField.Should().Be("StateProvinceID");
+        fkMutation.Fk.TargetTable.Should().Be("Person.StateProvince");
+    }
+
+    [Fact]
+    public void SqlServer_AlterTableFk_MultipleConstraintsInOneAdd_AllExtracted()
+    {
+        // AdventureWorks-style: single ADD with comma-separated CONSTRAINT … FOREIGN KEY clauses
+        const string sql = """
+            CREATE TABLE [HumanResources].[EmployeeDepartmentHistory] (
+                [BusinessEntityID] [int] NOT NULL,
+                [DepartmentID] [smallint] NOT NULL,
+                [ShiftID] [tinyint] NOT NULL
+            );
+            CREATE TABLE [HumanResources].[Department] ([DepartmentID] [smallint] NOT NULL);
+            CREATE TABLE [HumanResources].[Employee]   ([BusinessEntityID] [int] NOT NULL);
+            CREATE TABLE [HumanResources].[Shift]      ([ShiftID] [tinyint] NOT NULL);
+
+            ALTER TABLE [HumanResources].[EmployeeDepartmentHistory] ADD
+                CONSTRAINT [FK_EDH_Department] FOREIGN KEY ([DepartmentID])
+                    REFERENCES [HumanResources].[Department] ([DepartmentID]),
+                CONSTRAINT [FK_EDH_Employee] FOREIGN KEY ([BusinessEntityID])
+                    REFERENCES [HumanResources].[Employee] ([BusinessEntityID]),
+                CONSTRAINT [FK_EDH_Shift] FOREIGN KEY ([ShiftID])
+                    REFERENCES [HumanResources].[Shift] ([ShiftID]);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
+        var fkMutations = r.Mutations
+            .Where(m => m.Kind == SqlDdlParser.AlterTableMutationKind.AddForeignKey)
+            .ToList();
+        fkMutations.Should().HaveCount(3);
+        fkMutations.Select(m => m.Fk!.SourceField).Should()
+            .BeEquivalentTo(["DepartmentID", "BusinessEntityID", "ShiftID"]);
+        fkMutations.Select(m => m.Fk!.TargetTable).Should()
+            .BeEquivalentTo(["HumanResources.Department", "HumanResources.Employee", "HumanResources.Shift"]);
+    }
+
+    [Fact]
+    public void SqlServer_AlterTableFk_MultipleConstraints_WithOnDeleteClause_AllExtracted()
+    {
+        // Multi-FK with ON DELETE NO ACTION clauses between each entry
+        const string sql = """
+            CREATE TABLE parent ([id] INT NOT NULL);
+            CREATE TABLE child  ([a] INT NOT NULL, [b] INT NOT NULL);
+
+            ALTER TABLE child ADD
+                CONSTRAINT fk_a FOREIGN KEY ([a]) REFERENCES parent ([id]) ON DELETE CASCADE ON UPDATE NO ACTION,
+                CONSTRAINT fk_b FOREIGN KEY ([b]) REFERENCES parent ([id]) ON DELETE NO ACTION;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
+        var fks = r.Mutations
+            .Where(m => m.Kind == SqlDdlParser.AlterTableMutationKind.AddForeignKey)
+            .ToList();
+        fks.Should().HaveCount(2);
+        fks[0].Fk!.CascadeDelete.Should().BeTrue();
+        fks[1].Fk!.CascadeDelete.Should().BeFalse();
+    }
+
+    [Fact]
+    public void SqlServer_AlterTablePk_WithNocheckAdd_PkExtracted()
+    {
+        // WITH NOCHECK ADD variant (disables constraint check for existing rows)
+        const string sql = """
+            CREATE TABLE [dbo].[T] ([Id] [int] NOT NULL);
+            ALTER TABLE [dbo].[T] WITH NOCHECK ADD CONSTRAINT [PK_T] PRIMARY KEY ([Id]);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
+        r.PkAdditions.Should().ContainSingle(pk => pk.TableName == "dbo.T");
     }
 
     [Fact]
@@ -1908,5 +2053,698 @@ public sealed class SqlDdlParserTests
         var r = _parser.Parse(sql, DbProvider.Postgres);
         r.Tables.Should().HaveCount(1, "ghost table inside $$ body must not appear in parse result");
         r.Tables[0].Name.Should().Be("orders");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ALTER TABLE mutations (--include-migrations)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Mutations_NotPopulated_WhenIncludeMigrationsIsFalse()
+    {
+        const string sql = """
+            CREATE TABLE t (Id INT NOT NULL);
+            ALTER TABLE t ADD COLUMN Name NVARCHAR(50) NOT NULL;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Mutations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Mutations_AddColumn_AppendedToTable()
+    {
+        const string sql = """
+            CREATE TABLE [dbo].[t] ([Id] INT NOT NULL PRIMARY KEY);
+            ALTER TABLE [dbo].[t] ADD [Name] NVARCHAR(50) NOT NULL;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
+        r.Mutations.Should().ContainSingle(m => m.Kind == SqlDdlParser.AlterTableMutationKind.AddColumn);
+        var m = r.Mutations[0];
+        m.TableName.Should().Be("dbo.t");
+        m.Column!.Name.Should().Be("Name");
+        m.Column.Type.Should().Be("nvarchar(50)");
+        m.Column.Nullable.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Mutations_AddColumn_WithColumnKeyword()
+    {
+        const string sql = """
+            CREATE TABLE orders (id INT NOT NULL PRIMARY KEY);
+            ALTER TABLE orders ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'pending';
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.MySql, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle().Which;
+        m.Kind.Should().Be(SqlDdlParser.AlterTableMutationKind.AddColumn);
+        m.Column!.Name.Should().Be("status");
+        m.Column.Default.Should().Be("pending");
+    }
+
+    [Fact]
+    public void Mutations_AddColumn_MySqlFirst()
+    {
+        const string sql = """
+            CREATE TABLE t (id INT NOT NULL);
+            ALTER TABLE t ADD COLUMN code CHAR(3) NOT NULL FIRST;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.MySql, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle().Which;
+        m.First.Should().BeTrue();
+        m.After.Should().BeNull();
+    }
+
+    [Fact]
+    public void Mutations_AddColumn_MySqlAfter()
+    {
+        const string sql = """
+            CREATE TABLE t (id INT NOT NULL, name VARCHAR(50));
+            ALTER TABLE t ADD COLUMN email VARCHAR(100) AFTER name;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.MySql, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle().Which;
+        m.After.Should().Be("name");
+        m.First.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Mutations_AddForeignKey_WithConstraint()
+    {
+        const string sql = """
+            CREATE TABLE [dbo].[order_item] ([Id] INT NOT NULL, [OrderId] INT NOT NULL);
+            ALTER TABLE [dbo].[order_item]
+                ADD CONSTRAINT [FK_oi_order] FOREIGN KEY ([OrderId])
+                REFERENCES [dbo].[order_header] ([Id]) ON DELETE CASCADE;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle(m =>
+            m.Kind == SqlDdlParser.AlterTableMutationKind.AddForeignKey).Which;
+        m.Fk!.SourceField.Should().Be("OrderId");
+        m.Fk.TargetTable.Should().Be("dbo.order_header");
+        m.Fk.TargetField.Should().Be("Id");
+        m.Fk.CascadeDelete.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Mutations_AlterColumn_SqlServer()
+    {
+        const string sql = """
+            CREATE TABLE [dbo].[t] ([Name] NVARCHAR(50) NOT NULL);
+            ALTER TABLE [dbo].[t] ALTER COLUMN [Name] NVARCHAR(100) NULL;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle(m =>
+            m.Kind == SqlDdlParser.AlterTableMutationKind.AlterColumn).Which;
+        m.Column!.Name.Should().Be("Name");
+        m.Column.Type.Should().Be("nvarchar(100)");
+        m.Column.Nullable.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Mutations_ModifyColumn_MySql()
+    {
+        const string sql = """
+            CREATE TABLE t (name VARCHAR(50) NOT NULL);
+            ALTER TABLE t MODIFY COLUMN name VARCHAR(200) NOT NULL;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.MySql, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle(m =>
+            m.Kind == SqlDdlParser.AlterTableMutationKind.AlterColumn).Which;
+        m.Column!.Type.Should().Be("varchar(200)");
+    }
+
+    [Fact]
+    public void Mutations_DropColumn()
+    {
+        const string sql = """
+            CREATE TABLE t (id INT NOT NULL, legacy_col VARCHAR(10));
+            ALTER TABLE t DROP COLUMN legacy_col;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.MySql, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle().Which;
+        m.Kind.Should().Be(SqlDdlParser.AlterTableMutationKind.DropColumn);
+        m.ColName.Should().Be("legacy_col");
+    }
+
+    [Fact]
+    public void Mutations_DropColumn_WithColumnKeyword()
+    {
+        const string sql = """
+            CREATE TABLE t (id INT NOT NULL, old_name TEXT);
+            ALTER TABLE t DROP COLUMN old_name;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle().Which;
+        m.Kind.Should().Be(SqlDdlParser.AlterTableMutationKind.DropColumn);
+        m.ColName.Should().Be("old_name");
+    }
+
+    [Fact]
+    public void Mutations_RenameColumn_Postgres()
+    {
+        const string sql = """
+            CREATE TABLE t (id INT NOT NULL, fname TEXT);
+            ALTER TABLE t RENAME COLUMN fname TO first_name;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle().Which;
+        m.Kind.Should().Be(SqlDdlParser.AlterTableMutationKind.RenameColumn);
+        m.ColName.Should().Be("fname");
+        m.NewName.Should().Be("first_name");
+    }
+
+    [Fact]
+    public void Mutations_MultipleStatements_AllExtracted()
+    {
+        const string sql = """
+            CREATE TABLE t (id INT NOT NULL PRIMARY KEY);
+            ALTER TABLE t ADD COLUMN col1 INT NOT NULL;
+            ALTER TABLE t ADD COLUMN col2 TEXT;
+            ALTER TABLE t DROP COLUMN col1;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.MySql, includeMigrations: true);
+        r.Mutations.Should().HaveCount(3);
+        r.Mutations[0].Kind.Should().Be(SqlDdlParser.AlterTableMutationKind.AddColumn);
+        r.Mutations[1].Kind.Should().Be(SqlDdlParser.AlterTableMutationKind.AddColumn);
+        r.Mutations[2].Kind.Should().Be(SqlDdlParser.AlterTableMutationKind.DropColumn);
+    }
+
+    [Fact]
+    public void Mutations_UnknownTable_DoesNotError()
+    {
+        // ALTER TABLE targeting a table not in the CREATE TABLE set — silently produces
+        // a mutation; the caller skips it when applying.
+        const string sql = """
+            ALTER TABLE other_table ADD COLUMN x INT;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.MySql, includeMigrations: true);
+        r.Mutations.Should().ContainSingle(m => m.TableName == "other_table");
+        r.Errors.Should().BeEmpty();
+    }
+
+    // ── CreateIndex mutations ─────────────────────────────────────────────────
+
+    [Fact]
+    public void CreateIndex_Basic_SingleColumn()
+    {
+        const string sql = """
+            CREATE TABLE album (album_id INT NOT NULL, artist_id INT NOT NULL);
+            CREATE INDEX album_artist_id_idx ON album (artist_id);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle().Which;
+        m.Kind.Should().Be(SqlDdlParser.AlterTableMutationKind.CreateIndex);
+        m.TableName.Should().Be("album");
+        m.Index.Should().NotBeNull();
+        m.Index!.Name.Should().Be("album_artist_id_idx");
+        m.Index.Columns.Should().Equal("artist_id");
+        m.Index.IsUnique.Should().BeFalse();
+    }
+
+    [Fact]
+    public void CreateIndex_Unique_MultiColumn()
+    {
+        const string sql = """
+            CREATE TABLE address (id INT, line1 VARCHAR(100), city VARCHAR(40), state VARCHAR(40));
+            CREATE UNIQUE INDEX idx_addr ON address (line1, city, state);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle().Which;
+        m.Kind.Should().Be(SqlDdlParser.AlterTableMutationKind.CreateIndex);
+        m.Index!.IsUnique.Should().BeTrue();
+        m.Index.Columns.Should().Equal("line1", "city", "state");
+    }
+
+    [Fact]
+    public void CreateIndex_SqlServer_BracketedNamesAndFilegroup()
+    {
+        // SQL Server syntax: CREATE UNIQUE INDEX [name] ON [Schema].[Table]([col]) ON [PRIMARY]
+        const string sql = """
+            CREATE TABLE [Person].[Address] ([AddressID] INT NOT NULL, [rowguid] UNIQUEIDENTIFIER NOT NULL);
+            CREATE UNIQUE INDEX [AK_Address_rowguid] ON [Person].[Address]([rowguid]) ON [PRIMARY];
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle().Which;
+        m.Kind.Should().Be(SqlDdlParser.AlterTableMutationKind.CreateIndex);
+        m.TableName.Should().Be("Person.Address");
+        m.Index!.Name.Should().Be("AK_Address_rowguid");
+        m.Index.Columns.Should().Equal("rowguid");
+        m.Index.IsUnique.Should().BeTrue();
+    }
+
+    [Fact]
+    public void CreateIndex_SqlServer_ClusteredWithInclude()
+    {
+        const string sql = """
+            CREATE TABLE Orders (OrderId INT, CustomerId INT, Total DECIMAL(10,2));
+            CREATE UNIQUE CLUSTERED INDEX idx_orders ON Orders (OrderId) INCLUDE (CustomerId, Total);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle().Which;
+        m.Index!.IsClustered.Should().BeTrue();
+        m.Index.IncludedColumns.Should().Be("CustomerId, Total");
+    }
+
+    [Fact]
+    public void CreateIndex_Postgres_UsingMethod()
+    {
+        // PostgreSQL: CREATE INDEX name ON table USING btree (col)
+        const string sql = """
+            CREATE TABLE track (track_id INT NOT NULL, genre_id INT);
+            CREATE INDEX track_genre_id_idx ON track USING btree (genre_id);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres, includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle().Which;
+        m.Kind.Should().Be(SqlDdlParser.AlterTableMutationKind.CreateIndex);
+        m.TableName.Should().Be("track");
+        m.Index!.Name.Should().Be("track_genre_id_idx");
+        m.Index.Columns.Should().Equal("genre_id");
+    }
+
+    [Fact]
+    public void CreateIndex_WithDefaultSchema_TableNameQualified()
+    {
+        const string sql = """
+            CREATE TABLE album (album_id INT NOT NULL, artist_id INT NOT NULL);
+            CREATE INDEX album_artist_id_idx ON album (artist_id);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres, schemaPrefix: "public", includeMigrations: true);
+        var m = r.Mutations.Should().ContainSingle().Which;
+        m.TableName.Should().Be("public.album");
+    }
+
+    [Fact]
+    public void CreateIndex_NotPopulated_WithoutFlag()
+    {
+        const string sql = """
+            CREATE TABLE t (id INT);
+            CREATE INDEX t_idx ON t (id);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.MySql);  // no includeMigrations
+        r.Mutations.Should().BeEmpty();
+    }
+
+    // ── Inline FK schema qualification (Fix 2) ────────────────────────────────
+
+    [Fact]
+    public void InlineFk_SchemaPrefix_QualifiesTargetTable()
+    {
+        // Inline REFERENCES inside CREATE TABLE should be schema-qualified when --default-schema is set.
+        const string sql = """
+            CREATE TABLE artist (artist_id INT NOT NULL PRIMARY KEY, name VARCHAR(120));
+            CREATE TABLE album  (album_id INT NOT NULL PRIMARY KEY,
+                                 artist_id INT NOT NULL REFERENCES artist (artist_id));
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres, schemaPrefix: "public");
+        var album = r.Tables.Single(t => t.Name == "public.album");
+        album.ForeignKeys.Should().ContainSingle(fk =>
+            fk.SourceField == "artist_id" && fk.TargetTable == "public.artist");
+    }
+
+    [Fact]
+    public void InlineFk_NoSchemaPrefix_TargetTableUnchanged()
+    {
+        // Without --default-schema the target table is stored as declared.
+        const string sql = """
+            CREATE TABLE artist (artist_id INT NOT NULL PRIMARY KEY);
+            CREATE TABLE album  (album_id INT NOT NULL PRIMARY KEY,
+                                 artist_id INT NOT NULL REFERENCES artist (artist_id));
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        var album = r.Tables.Single(t => t.Name == "album");
+        album.ForeignKeys.Should().ContainSingle(fk => fk.TargetTable == "artist");
+    }
+
+    [Fact]
+    public void InlineFk_AlreadyQualified_NotDoubleQualified()
+    {
+        // If the FK target already has a schema prefix, it must not be prefixed again.
+        const string sql = """
+            CREATE TABLE [Sales].[Customer] ([CustomerId] INT NOT NULL PRIMARY KEY);
+            CREATE TABLE [Sales].[Order]    ([OrderId] INT NOT NULL PRIMARY KEY,
+                [CustomerId] INT NOT NULL REFERENCES [Sales].[Customer] ([CustomerId]));
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, schemaPrefix: "dbo");
+        var order = r.Tables.Single(t => t.Name == "Sales.Order");
+        order.ForeignKeys.Should().ContainSingle(fk => fk.TargetTable == "Sales.Customer");
+    }
+
+    // ── SQL Server XML index parsing (Fix B) ──────────────────────────────────
+
+    [Fact]
+    public void CreateIndex_PrimaryXml_CapturedAsIndex()
+    {
+        const string sql = """
+            CREATE TABLE [Person].[Person] ([BusinessEntityID] INT NOT NULL, [AdditionalContactInfo] XML);
+            GO
+            CREATE PRIMARY XML INDEX [PXML_Person_AdditionalContactInfo]
+            ON [Person].[Person] ([AdditionalContactInfo]);
+            GO
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, schemaPrefix: "Person",
+            includeMigrations: true);
+        r.Mutations.Should().ContainSingle(m =>
+            m.Kind == SqlDdlParser.AlterTableMutationKind.CreateIndex &&
+            m.Index!.Name == "PXML_Person_AdditionalContactInfo" &&
+            m.TableName == "Person.Person");
+    }
+
+    [Fact]
+    public void CreateIndex_SecondaryXml_CapturedAsIndex()
+    {
+        const string sql = """
+            CREATE TABLE [Person].[Person] ([BusinessEntityID] INT NOT NULL, [Demographics] XML);
+            GO
+            CREATE PRIMARY XML INDEX [PXML_Person_Demographics]
+            ON [Person].[Person] ([Demographics]);
+            GO
+            CREATE XML INDEX [XMLPATH_Person_Demographics]
+            ON [Person].[Person] ([Demographics])
+            USING XML INDEX [PXML_Person_Demographics]
+            FOR PATH;
+            GO
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, schemaPrefix: "Person",
+            includeMigrations: true);
+        var indexes = r.Mutations
+            .Where(m => m.Kind == SqlDdlParser.AlterTableMutationKind.CreateIndex)
+            .Select(m => m.Index!.Name)
+            .ToList();
+        indexes.Should().Contain("PXML_Person_Demographics");
+        indexes.Should().Contain("XMLPATH_Person_Demographics");
+    }
+
+    [Fact]
+    public void CreateIndex_PrimaryXml_NotPopulated_WithoutFlag()
+    {
+        const string sql = """
+            CREATE TABLE [Person].[Person] ([BusinessEntityID] INT NOT NULL, [AdditionalContactInfo] XML);
+            GO
+            CREATE PRIMARY XML INDEX [PXML_Person_AdditionalContactInfo]
+            ON [Person].[Person] ([AdditionalContactInfo]);
+            GO
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer); // no includeMigrations
+        r.Mutations.Should().BeEmpty();
+    }
+
+    // ── SQL Server user-defined type alias resolution (Fix C) ─────────────────
+
+    [Fact]
+    public void SqlServer_CreateType_AliasResolvedInCreateTable()
+    {
+        const string sql = """
+            CREATE TYPE [Name] FROM nvarchar(50) NULL;
+            CREATE TYPE [Flag] FROM bit NOT NULL;
+            GO
+            CREATE TABLE [HumanResources].[Department] (
+                [DepartmentID] [smallint] NOT NULL,
+                [Name] [Name] NOT NULL,
+                [IsActive] [Flag] NOT NULL
+            );
+            GO
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, schemaPrefix: "HumanResources");
+        var t = r.Tables.Single();
+        t.Fields.Single(f => f.Name == "Name").Type.Should().Be("nvarchar(50)");
+        t.Fields.Single(f => f.Name == "IsActive").Type.Should().Be("bit");
+    }
+
+    [Fact]
+    public void SqlServer_CreateType_SchemaQualified_AliasResolvedInCreateTable()
+    {
+        // Schema-qualified CREATE TYPE should still match unqualified use in CREATE TABLE.
+        const string sql = """
+            CREATE TYPE [dbo].[AccountNumber] FROM nvarchar(15) NULL;
+            GO
+            CREATE TABLE [Sales].[Vendor] (
+                [AccountNumber] [AccountNumber] NOT NULL
+            );
+            GO
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, schemaPrefix: "Sales");
+        var t = r.Tables.Single();
+        t.Fields.Single(f => f.Name == "AccountNumber").Type.Should().Be("nvarchar(15)");
+    }
+
+    [Fact]
+    public void SqlServer_CreateType_OtherProvider_NoSubstitution()
+    {
+        // CREATE TYPE aliases are SQL Server-only; other providers must be unaffected.
+        // On other providers the type is stored as declared (lowercased by NormalizeType).
+        const string sql = """
+            CREATE TABLE t (col mytext NOT NULL);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        var t = r.Tables.Single();
+        t.Fields.Single(f => f.Name == "col").Type.Should().Be("mytext");
+    }
+
+    // ── SQL Server XML schema collection normalisation (Fix E) ────────────────
+
+    [Fact]
+    public void SqlServer_XmlSchemaCollection_StrippedToXml()
+    {
+        const string sql = """
+            CREATE TABLE [Person].[Person] (
+                [BusinessEntityID] INT NOT NULL,
+                [AdditionalContactInfo] XML([person].[AdditionalContactInfoSchemaCollection]) NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, schemaPrefix: "Person");
+        var t = r.Tables.Single();
+        t.Fields.Single(f => f.Name == "AdditionalContactInfo").Type.Should().Be("xml");
+    }
+
+    // ── CHECK expression normalisation — Fix 1 ────────────────────────────────
+
+    [Fact]
+    public void CheckNorm_SimpleComparisonInt_WrapsLiteral()
+    {
+        SqlDdlParser.NormalizeSqlServerCheckExpression("[OrderQty] > 0")
+            .Should().Be("([OrderQty]>(0))");
+    }
+
+    [Fact]
+    public void CheckNorm_GreaterEqualFloat_WrapsLiteral()
+    {
+        SqlDdlParser.NormalizeSqlServerCheckExpression("[SubTotal] >= 0.00")
+            .Should().Be("([SubTotal]>=(0.00))");
+    }
+
+    [Fact]
+    public void CheckNorm_ColumnToColumn_NoLiteralWrap()
+    {
+        SqlDdlParser.NormalizeSqlServerCheckExpression("[DueDate] >= [OrderDate]")
+            .Should().Be("([DueDate]>=[OrderDate])");
+    }
+
+    [Fact]
+    public void CheckNorm_BetweenIntegers_Expands()
+    {
+        SqlDdlParser.NormalizeSqlServerCheckExpression("[VacationHours] BETWEEN -40 AND 240")
+            .Should().Be("([VacationHours]>=(-40) AND [VacationHours]<=(240))");
+    }
+
+    [Fact]
+    public void CheckNorm_BetweenZeroAndInt_Expands()
+    {
+        SqlDdlParser.NormalizeSqlServerCheckExpression("[SickLeaveHours] BETWEEN 0 AND 120")
+            .Should().Be("([SickLeaveHours]>=(0) AND [SickLeaveHours]<=(120))");
+    }
+
+    [Fact]
+    public void CheckNorm_BetweenStringAndFunction_Expands()
+    {
+        SqlDdlParser.NormalizeSqlServerCheckExpression(
+                "[BirthDate] BETWEEN '1930-01-01' AND DATEADD(YEAR, -18, GETDATE())")
+            .Should().Be(
+                "([BirthDate]>='1930-01-01' AND [BirthDate]<=dateadd(year,(-18),getdate()))");
+    }
+
+    [Fact]
+    public void CheckNorm_InWithStrings_ExpandsReversed()
+    {
+        SqlDdlParser.NormalizeSqlServerCheckExpression("UPPER([Gender]) IN ('M', 'F')")
+            .Should().Be("(upper([Gender])='F' OR upper([Gender])='M')");
+    }
+
+    [Fact]
+    public void CheckNorm_OrChainWithIsNull_StripsSubParens()
+    {
+        SqlDdlParser.NormalizeSqlServerCheckExpression(
+                "([EndDate] >= [StartDate]) OR ([EndDate] IS NULL)")
+            .Should().Be("([EndDate]>=[StartDate] OR [EndDate] IS NULL)");
+    }
+
+    [Fact]
+    public void CheckNorm_BetweenDatesWithDateadd_Expands()
+    {
+        SqlDdlParser.NormalizeSqlServerCheckExpression(
+                "[HireDate] BETWEEN '1996-07-01' AND DATEADD(DAY, 1, GETDATE())")
+            .Should().Be(
+                "([HireDate]>='1996-07-01' AND [HireDate]<=dateadd(day,(1),getdate()))");
+    }
+
+    [Fact]
+    public void CheckNorm_MaritalStatusIn_ExpandsReversed()
+    {
+        SqlDdlParser.NormalizeSqlServerCheckExpression("UPPER([MaritalStatus]) IN ('M', 'S')")
+            .Should().Be("(upper([MaritalStatus])='S' OR upper([MaritalStatus])='M')");
+    }
+
+    // ── CREATE VIEW parsing — Fix 2 ───────────────────────────────────────────
+
+    [Fact]
+    public void CreateView_SqlServer_SimpleColumns_Captured()
+    {
+        const string sql = """
+            CREATE TABLE [HumanResources].[Department] ([DepartmentID] INT NOT NULL);
+            GO
+            CREATE VIEW [HumanResources].[vDepartment]
+            AS
+            SELECT
+                d.[DepartmentID]
+                ,d.[Name]
+                ,d.[GroupName]
+            FROM [HumanResources].[Department] d;
+            GO
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer, schemaPrefix: "HumanResources");
+        r.Views.Should().ContainSingle(v => v.Name == "HumanResources.vDepartment");
+        var view = r.Views.Single();
+        view.IsView.Should().BeTrue();
+        view.Fields.Select(f => f.Name).Should().BeEquivalentTo(
+            new[] { "DepartmentID", "Name", "GroupName" });
+        view.Fields.Should().AllSatisfy(f => f.Type.Should().Be("unknown"));
+    }
+
+    [Fact]
+    public void CreateView_SqlServer_AliasedColumns_UsesAlias()
+    {
+        const string sql = """
+            CREATE VIEW [dbo].[vTest]
+            AS
+            SELECT
+                t.[ID]
+                ,t.[Name] AS [DisplayName]
+                ,UPPER(t.[Code]) AS [UpperCode]
+            FROM [dbo].[T] t;
+            GO
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        var view = r.Views.Should().ContainSingle().Subject;
+        view.Fields.Select(f => f.Name).Should().BeEquivalentTo(
+            new[] { "ID", "DisplayName", "UpperCode" });
+    }
+
+    [Fact]
+    public void CreateView_Postgres_SimpleColumns_Captured()
+    {
+        const string sql = """
+            CREATE VIEW public.v_customer AS
+            SELECT
+                c.id,
+                c.first_name,
+                c.last_name AS full_name
+            FROM public.customer c;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres, schemaPrefix: "public");
+        r.Views.Should().ContainSingle(v => v.Name == "public.v_customer");
+        var view = r.Views.Single();
+        view.IsView.Should().BeTrue();
+        view.Fields.Select(f => f.Name).Should().BeEquivalentTo(
+            new[] { "id", "first_name", "full_name" });
+    }
+
+    [Fact]
+    public void CreateView_NoDuplicateColumns_WhenViewNameRepeated()
+    {
+        // Column alias appears on multiple lines (multi-line expression) — should only capture once
+        const string sql = """
+            CREATE VIEW [dbo].[v]
+            AS
+            SELECT [A], [B]
+            FROM [dbo].[T];
+            GO
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Views.Should().ContainSingle();
+        r.Views[0].Fields.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void CreateView_Tables_NotIncludedInViews()
+    {
+        // Tables must stay in Tables list; views in Views list — no crossover
+        const string sql = """
+            CREATE TABLE [dbo].[T] ([ID] INT NOT NULL);
+            GO
+            CREATE VIEW [dbo].[vT] AS SELECT [ID] FROM [dbo].[T];
+            GO
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Tables.Should().ContainSingle(t => t.Name == "dbo.T");
+        r.Views.Should().ContainSingle(v => v.Name == "dbo.vT");
+    }
+
+    [Fact]
+    public void CreateView_SqlServer_AssignmentStyleAlias_UsesLhsAsColumnName()
+    {
+        // SQL Server supports [alias] = expr as an alternative to expr AS [alias]
+        const string sql = """
+            CREATE VIEW [Sales].[vTest]
+            AS
+            SELECT
+                p.[BusinessEntityID]
+                ,[StateName] = sp.[Name]
+                ,[CountryName] = cr.[Name]
+            FROM [Person].[Person] p
+            INNER JOIN [Person].[StateProvince] sp ON sp.[StateProvinceID] = p.[StateProvinceID]
+            INNER JOIN [Person].[CountryRegion] cr ON cr.[CountryRegionCode] = sp.[CountryRegionCode];
+            GO
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.SqlServer);
+        r.Views.Should().ContainSingle(v => v.Name == "Sales.vTest");
+        var cols = r.Views[0].Fields.Select(f => f.Name).ToList();
+        cols.Should().Contain("BusinessEntityID");
+        cols.Should().Contain("StateName");
+        cols.Should().Contain("CountryName");
+        cols.Should().NotContain("Name");  // dotted-ref fallback must NOT fire
     }
 }

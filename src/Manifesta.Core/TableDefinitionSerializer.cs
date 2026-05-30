@@ -26,6 +26,7 @@ public static class TableDefinitionSerializer
             IsDeprecated               = table.IsDeprecated ? true : null,
             DeprecationMessage         = table.IsDeprecated ? table.DeprecationMessage : null,
             IsReferenceTable           = table.IsReferenceTable ? true : null,
+            IsView                     = table.IsView ? true : null,
             LabelField    = table.LabelField,
             Fields        = table.Fields.Select(FieldDto.From).ToList(),
             PrimaryKey    = table.PrimaryKey.Count > 0 ? table.PrimaryKey.ToList() : null,
@@ -91,6 +92,10 @@ public static class TableDefinitionSerializer
         [JsonPropertyName("isReferenceTable")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public bool? IsReferenceTable { get; init; }
+
+        [JsonPropertyName("isView")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public bool? IsView { get; init; }
 
         [JsonPropertyName("labelField")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

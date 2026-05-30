@@ -834,6 +834,252 @@ public sealed class CliSmokeTests
         finally { Directory.Delete(tmp, recursive: true); }
     }
 
+    [Fact]
+    public async Task InitSql_AlterTablePk_WithoutFlag_PkNotApplied()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        var outDir = Path.Combine(tmp, "out");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, "schema.sql"), """
+                CREATE TABLE [dbo].[Widget] ([Id] INT NOT NULL, [Name] NVARCHAR(50) NOT NULL);
+                ALTER TABLE [dbo].[Widget] ADD CONSTRAINT [PK_Widget] PRIMARY KEY ([Id]);
+                """);
+
+            var (code, _, stderr) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",      Path.Combine(tmp, "schema.sql"),
+                "--output-dir", outDir,
+                "--provider",   "sqlserver");
+
+            code.Should().Be(0, because: stderr);
+            var json = await File.ReadAllTextAsync(Directory.GetFiles(outDir, "*.json")[0]);
+            // No --include-migrations → ALTER TABLE PK is ignored → primaryKey stays empty
+            json.Should().NotContain("\"primaryKey\"");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_AlterTablePk_WithFlag_PkApplied()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        var outDir = Path.Combine(tmp, "out");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, "schema.sql"), """
+                CREATE TABLE [dbo].[Widget] ([Id] INT NOT NULL, [Name] NVARCHAR(50) NOT NULL);
+                ALTER TABLE [dbo].[Widget] ADD CONSTRAINT [PK_Widget] PRIMARY KEY ([Id]);
+                """);
+
+            var (code, _, stderr) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",              Path.Combine(tmp, "schema.sql"),
+                "--output-dir",         outDir,
+                "--provider",           "sqlserver",
+                "--include-migrations");
+
+            code.Should().Be(0, because: stderr);
+            var json = await File.ReadAllTextAsync(Directory.GetFiles(outDir, "*.json")[0]);
+            // --include-migrations → ALTER TABLE PK is applied
+            json.Should().Contain("\"primaryKey\"");
+            json.Should().Contain("Id");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_DropColumn_RemovesOrphanedFk()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        var outDir = Path.Combine(tmp, "out");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, "schema.sql"), """
+                CREATE TABLE [dbo].[Order] ([Id] INT NOT NULL, [CustomerId] INT NOT NULL);
+                CREATE TABLE [dbo].[Customer] ([Id] INT NOT NULL);
+                ALTER TABLE [dbo].[Order] ADD CONSTRAINT [FK_Order_Customer]
+                    FOREIGN KEY ([CustomerId]) REFERENCES [dbo].[Customer] ([Id]);
+                ALTER TABLE [dbo].[Order] DROP COLUMN [CustomerId];
+                """);
+
+            var (code, _, stderr) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",              Path.Combine(tmp, "schema.sql"),
+                "--output-dir",         outDir,
+                "--provider",           "sqlserver",
+                "--include-migrations");
+
+            code.Should().Be(0, because: stderr);
+            var json = await File.ReadAllTextAsync(Path.Combine(outDir, "dbo.Order.json"));
+            // FK whose sourceField was dropped must be removed
+            json.Should().NotContain("foreignKeys");
+            // Column itself must also be gone
+            json.Should().NotContain("CustomerId");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_RenameColumn_UpdatesFkSourceField()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        var outDir = Path.Combine(tmp, "out");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, "schema.sql"), """
+                CREATE TABLE [dbo].[Order] ([Id] INT NOT NULL, [cust_id] INT NOT NULL);
+                CREATE TABLE [dbo].[Customer] ([Id] INT NOT NULL);
+                ALTER TABLE [dbo].[Order] ADD CONSTRAINT [FK_Order_Customer]
+                    FOREIGN KEY ([cust_id]) REFERENCES [dbo].[Customer] ([Id]);
+                ALTER TABLE [dbo].[Order] RENAME COLUMN [cust_id] TO [CustomerId];
+                """);
+
+            var (code, _, stderr) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",              Path.Combine(tmp, "schema.sql"),
+                "--output-dir",         outDir,
+                "--provider",           "sqlserver",
+                "--include-migrations");
+
+            code.Should().Be(0, because: stderr);
+            var json = await File.ReadAllTextAsync(Path.Combine(outDir, "dbo.Order.json"));
+            // sourceField must track the new name
+            json.Should().Contain("\"CustomerId\"");
+            json.Should().NotContain("cust_id");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_CreateIndex_AppliedToTable()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        var outDir = Path.Combine(tmp, "out");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, "schema.sql"), """
+                CREATE TABLE album (album_id INT NOT NULL, artist_id INT NOT NULL);
+                CREATE INDEX album_artist_id_idx ON album (artist_id);
+                CREATE UNIQUE INDEX album_unique_idx ON album (album_id);
+                """);
+
+            var (code, _, stderr) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",              Path.Combine(tmp, "schema.sql"),
+                "--output-dir",         outDir,
+                "--provider",           "postgresql",
+                "--include-migrations");
+
+            code.Should().Be(0, because: stderr);
+            var json = await File.ReadAllTextAsync(Path.Combine(outDir, "album.json"));
+            json.Should().Contain("album_artist_id_idx");
+            json.Should().Contain("album_unique_idx");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_CreateIndex_NotApplied_WithoutFlag()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        var outDir = Path.Combine(tmp, "out");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, "schema.sql"), """
+                CREATE TABLE album (album_id INT NOT NULL, artist_id INT NOT NULL);
+                CREATE INDEX album_artist_id_idx ON album (artist_id);
+                """);
+
+            var (code, _, stderr) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",    Path.Combine(tmp, "schema.sql"),
+                "--output-dir", outDir,
+                "--provider", "postgresql");  // no --include-migrations
+
+            code.Should().Be(0, because: stderr);
+            var json = await File.ReadAllTextAsync(Path.Combine(outDir, "album.json"));
+            json.Should().NotContain("album_artist_id_idx");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_InlineFk_SchemaQualifiesTarget()
+    {
+        // CREATE TABLE with inline REFERENCES + --default-schema → targetTable must be schema-qualified.
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        var outDir = Path.Combine(tmp, "out");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, "schema.sql"), """
+                CREATE TABLE artist (artist_id INT NOT NULL PRIMARY KEY);
+                CREATE TABLE album  (album_id INT NOT NULL PRIMARY KEY,
+                                     artist_id INT NOT NULL REFERENCES artist (artist_id));
+                """);
+
+            var (code, _, stderr) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",          Path.Combine(tmp, "schema.sql"),
+                "--output-dir",     outDir,
+                "--provider",       "postgresql",
+                "--default-schema", "public");
+
+            code.Should().Be(0, because: stderr);
+            var json = await File.ReadAllTextAsync(Path.Combine(outDir, "public.album.json"));
+            json.Should().Contain("\"public.artist\"");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_AddForeignKey_SchemaQualifiesUnqualifiedTarget()
+    {
+        // When --default-schema is set and ALTER TABLE REFERENCES uses an unqualified table name,
+        // the FK targetTable must be prefixed with the default schema so validate cross can resolve it.
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        var outDir = Path.Combine(tmp, "out");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, "schema.sql"), """
+                CREATE TABLE artist (artist_id INT NOT NULL, name VARCHAR(120));
+                CREATE TABLE album  (album_id  INT NOT NULL, artist_id INT NOT NULL);
+                ALTER TABLE album ADD CONSTRAINT fk_album_artist
+                    FOREIGN KEY (artist_id) REFERENCES artist (artist_id);
+                """);
+
+            var (code, _, stderr) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",              Path.Combine(tmp, "schema.sql"),
+                "--output-dir",         outDir,
+                "--provider",           "postgresql",
+                "--default-schema",     "public",
+                "--include-migrations");
+
+            code.Should().Be(0, because: stderr);
+            var json = await File.ReadAllTextAsync(Path.Combine(outDir, "public.album.json"));
+            // FK target must be schema-qualified
+            json.Should().Contain("\"public.artist\"");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
     // ── db merge ─────────────────────────────────────────────────────────────
 
     [Fact]

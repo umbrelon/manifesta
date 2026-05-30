@@ -39,12 +39,13 @@ manifesta validate schema section --output-dir ./schemas
 | `labelField` | string | No | — | Name of the field that holds the human-readable display value for this table. Used by documentation generators and full-edition AI features. Declared once on the referenced table, not on individual FKs. |
 | `isReferenceTable` | boolean | No | `false` | Marks this as a lookup/reference table. Enables the `data` property for embedding row values. |
 | `data` | object[] | No | — | Row data. Each object maps column names to values. Only written when `isReferenceTable: true`. See [Reference Tables](./schema-features.md#reference-tables) for validation rules. |
+| `isView` | boolean | No | `false` | Marks this entry as a database view rather than a base table. Set automatically by `init sql` when a `CREATE VIEW` statement is parsed, and by `init db` / `db merge` when the source object is a view. Omitted from JSON when `false`. |
 | `isDeprecated` | boolean | No | `false` | Marks the table as deprecated. Adds a `[DEPRECATED]` badge and blockquote notice in `database.md`. |
 | `deprecationMessage` | string | No | — | Shown as the body of the deprecation notice. Only rendered when `isDeprecated: true`. |
 | `foreignKeys` | ForeignKey[] | No | `[]` | FK relationships originating from this table. |
 | `uniqueConstraints` | object[] | No | `[]` | Unique constraints. Populated automatically by `init db` and `init prisma`. |
 | `indexes` | object[] | No | `[]` | Index definitions. Populated automatically by `init db` and `init prisma`. |
-| `checkConstraints` | object[] | No | `[]` | CHECK constraints. Populated automatically by `init db` (SQL Server full edition). |
+| `checkConstraints` | object[] | No | `[]` | CHECK constraints. Populated automatically by `init sql --provider sqlserver` (at parse time, with SQL Server canonical normalisation applied) and by `init db` / `db merge` (full edition, from live introspection). |
 
 ---
 

@@ -219,6 +219,11 @@ manifesta init sql --input ./migrations --provider mysql --pattern "2024/create_
 # Apply a schema prefix to unqualified table names
 manifesta init sql --input dump.sql --schema dbo --provider sqlserver
 
+# Also process ALTER TABLE statements after CREATE TABLE blocks (SQL Server T-SQL)
+# Required when PKs and FKs are declared via ALTER TABLE ADD CONSTRAINT rather
+# than inline in CREATE TABLE — common in SQL Server scripts and instawdb.sql style dumps
+manifesta init sql --input instawdb.sql --provider sqlserver --include-migrations
+
 # Overwrite existing table.json files
 manifesta init sql --input schema.sql --overwrite
 
@@ -234,6 +239,7 @@ manifesta init sql --input schema.sql --dry-run
 | `--output-dir` | No | `./tables` | Directory for generated `table.json` files |
 | `--provider` | No | `mysql` | SQL dialect: `mysql`, `postgres`, `sqlite`, `sqlserver` |
 | `--schema` | No | — | Schema prefix applied to tables that have no schema qualifier (e.g. `dbo`) |
+| `--include-migrations` | No | false | Also process `ALTER TABLE` statements that appear after `CREATE TABLE` blocks. Required when PKs and FKs are declared via `ALTER TABLE ADD CONSTRAINT` rather than inline — common in SQL Server T-SQL scripts. |
 | `--overwrite` | No | false | Overwrite existing `table.json` files |
 | `--recursive` / `-r` | No | false | Expand a plain filename `--pattern` to all subdirectories (prepends `**/`). Ignored when `--pattern` already contains a path separator or `**`, and when `--input` is a single file |
 | `--pattern` | No | `*.sql` | Glob pattern for file matching when `--input` is a directory. **Plain filename patterns** (e.g. `*_up.sql`) are controlled by `--recursive`. **Path globs** (e.g. `2024/**/*.sql`, `**/create_*.sql`) are matched directly and ignore `--recursive` |
@@ -259,8 +265,10 @@ manifesta init sql --input schema.sql --dry-run
 | Table-level PRIMARY KEY | ✓ | ✓ | ✓ | ✓ |
 | Inline PRIMARY KEY | ✓ | ✓ | ✓ | ✓ |
 | FOREIGN KEY (table-level) | ✓ | ✓ | ✓ | ✓ |
+| `ALTER TABLE ADD CONSTRAINT` PK / FK (`--include-migrations`) | — | — | — | ✓ |
 | UNIQUE constraints | ✓ | ✓ | ✓ | ✓ |
-| CHECK constraints | ✓ | ✓ | ✓ | ✓ |
+| CHECK constraints | ✓ | ✓ | ✓ | ✓ (normalised) |
+| `CREATE VIEW` — column names | ✓ | ✓ | ✓ | ✓ |
 | `COMMENT '...'` on column | ✓ | — | — | — |
 | `SERIAL` / `BIGSERIAL` → integer | — | ✓ | — | — |
 | `GENERATED ALWAYS AS (expr) STORED` | ✓ | ✓ | — | — |
@@ -268,6 +276,8 @@ manifesta init sql --input schema.sql --dry-run
 | `GENERATED ALWAYS AS IDENTITY` | — | stripped | — | — |
 | `AUTO_INCREMENT` / `AUTOINCREMENT` | stripped | — | stripped | — |
 | `IDENTITY(seed, inc)` | — | — | — | stripped |
+| User-defined type aliases (`CREATE TYPE … FROM`) | — | — | — | ✓ |
+| XML schema collection qualifier stripped | — | — | — | ✓ |
 
 **Type normalisation:**
 
@@ -286,6 +296,16 @@ manifesta init sql --input schema.sql --dry-run
 **SQL Server note:**
 
 `init sql` is the **only** `init` command that supports SQL Server in the OSS edition. SQL Server support is possible here because parsing DDL text requires no live database connection — the `DatabaseIntrospectorRegistry` enterprise gate is not involved.
+
+SQL Server-specific behaviour:
+
+| Behaviour | Details |
+|-----------|---------|
+| `--include-migrations` | Processes `ALTER TABLE ADD CONSTRAINT` statements that follow `CREATE TABLE` blocks. SQL Server scripts commonly declare all PKs and FKs this way — without this flag every table will have an empty `primaryKey` and no `foreignKeys`. |
+| CHECK expression normalisation | SQL Server stores CHECK expressions in a canonical internal form. The parser applies the same rules: `BETWEEN a AND b` → `>=(a) AND <=(b)`; `IN (...)` → `OR` chain (reversed); function names lowercased; numeric literals parenthesised. The resulting expression matches what `sys.check_constraints` returns, so `db drift` reports zero CHECK drift pre-merge. |
+| `CREATE VIEW` | View column names are extracted from the `SELECT` list and stored with `"isView": true` and `"type": "unknown"`. Column types are resolved from the live database by `db merge`. Four aliasing patterns are handled: `expr AS [alias]`, `[alias] = expr` (SQL Server assignment style), `table.[col]` (dotted reference), and bare identifiers. |
+| User-defined type aliases | `CREATE TYPE [name] FROM base_type` declarations are scanned and the aliases substituted in `CREATE TABLE` column definitions (e.g. `name` → `nvarchar(50)`, `flag` → `bit`). |
+| XML schema collections | `xml([schema].[collection])` column types are normalised to bare `xml` — matching the form returned by the SQL Server introspector. |
 
 To bootstrap from a SQL Server database (rather than a DDL file), use the `init db` command from the full edition.
 

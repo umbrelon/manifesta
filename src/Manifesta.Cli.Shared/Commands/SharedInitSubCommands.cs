@@ -95,6 +95,13 @@ public sealed class InitSqlCommand : ManifestSharedCommandBase
         "When the same table name appears in multiple input files, keep the last-parsed definition " +
         "and emit a warning instead of failing. Useful when scanning a monorepo where shared tables " +
         "are duplicated across modules.");
+    private readonly Option<bool>    _includeMigrations = new(["--include-migrations"],
+        () => false,
+        "Also apply ALTER TABLE statements after parsing CREATE TABLE blocks. " +
+        "Handles: ADD CONSTRAINT PRIMARY KEY, ADD CONSTRAINT FOREIGN KEY, ADD COLUMN, " +
+        "ALTER/MODIFY COLUMN, DROP COLUMN, RENAME COLUMN. " +
+        "Opt-in because migration files may contain partial or environment-specific statements " +
+        "that should not be applied blindly to the registry.");
 
     public InitSqlCommand() : base("sql",
         "Parse SQL DDL files and write one table-definition JSON per table")
@@ -109,6 +116,7 @@ public sealed class InitSqlCommand : ManifestSharedCommandBase
         AddOption(_recursive);
         AddOption(_pattern);
         AddOption(_lastWins);
+        AddOption(_includeMigrations);
 
         this.SetHandler(context => InvokeBaseAsync(context));
     }
@@ -125,7 +133,8 @@ public sealed class InitSqlCommand : ManifestSharedCommandBase
         var provider      = SqlDdlProviderHelper.Parse(pr.GetValueForOption(_provider));
         var recursive     = pr.GetValueForOption(_recursive);
         var pattern       = pr.GetValueForOption(_pattern) ?? "*.sql";
-        var lastWins      = pr.GetValueForOption(_lastWins);
+        var lastWins           = pr.GetValueForOption(_lastWins);
+        var includeMigrations  = pr.GetValueForOption(_includeMigrations);
 
         // MySQL and SQLite have no schema namespace — both schema flags are no-ops.
         if (provider is DbProvider.MySql or DbProvider.Sqlite)
@@ -150,11 +159,18 @@ public sealed class InitSqlCommand : ManifestSharedCommandBase
         // ── Parse all files ───────────────────────────────────────────────────
         var parser        = new SqlDdlParser();
         var allTables     = new List<TableDefinition>();
+        var allViews      = new List<TableDefinition>();
         var allErrors     = new List<string>();
         // Collects ALTER TABLE … ADD CONSTRAINT … PRIMARY KEY additions from every file.
         // Used below to backfill tables whose CREATE TABLE body omits the PK constraint
         // (common in SQL Server database projects where PKs live in *_Updates.sql files).
-        var allPkAdditions = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        // Populated only when --include-migrations is set. A PK defined inline in CREATE TABLE
+        // is the common case; the ALTER TABLE form should not override it when the flag is off.
+        var allPkAdditions = includeMigrations
+            ? new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+            : null;
+        // Column-level mutations (ADD COLUMN, ADD FK, ALTER COLUMN, DROP COLUMN, RENAME COLUMN).
+        var allMutations = includeMigrations ? new List<SqlDdlParser.AlterTableMutation>() : null;
         int filesWithDups = 0;
 
         foreach (var file in sqlFiles)
@@ -168,15 +184,18 @@ public sealed class InitSqlCommand : ManifestSharedCommandBase
                 return (int)ExitCode.FatalSchemaErrors;
             }
 
-            var result = parser.Parse(sql, provider, schema);
+            var result = parser.Parse(sql, provider, schema, includeMigrations);
 
             foreach (var err in result.Errors)
                 OutputFormatter.WriteError($"[{Path.GetFileName(file)}] {err}");
             allErrors.AddRange(result.Errors);
 
             // Accumulate PK additions (last writer wins if multiple files set the same table's PK).
-            foreach (var pk in result.PkAdditions)
-                allPkAdditions[pk.TableName] = pk.Columns;
+            if (allPkAdditions is not null)
+                foreach (var pk in result.PkAdditions)
+                    allPkAdditions[pk.TableName] = pk.Columns;
+
+            allMutations?.AddRange(result.Mutations);
 
             // Skip files where the same table name appears more than once
             // (typical cause: conditional migration scripts with two CREATE TABLE variants).
@@ -200,19 +219,154 @@ public sealed class InitSqlCommand : ManifestSharedCommandBase
             }
 
             allTables.AddRange(result.Tables);
+            allViews.AddRange(result.Views);
         }
 
         // ── Back-fill PRIMARY KEY from ALTER TABLE statements ─────────────────
-        // Tables in SQL Server database projects often have their PK defined in a
-        // separate *_Updates.sql file via ALTER TABLE … ADD CONSTRAINT … PRIMARY KEY.
-        // Apply those additions to any table that still has an empty PrimaryKey list.
-        if (allPkAdditions.Count > 0)
+        // Only active when --include-migrations is set. Applies ALTER TABLE … ADD CONSTRAINT …
+        // PRIMARY KEY additions to tables that still have an empty PrimaryKey after CREATE TABLE parsing.
+        if (allPkAdditions is { Count: > 0 })
         {
             for (int idx = 0; idx < allTables.Count; idx++)
             {
                 var t = allTables[idx];
                 if (t.PrimaryKey.Count == 0 && allPkAdditions.TryGetValue(t.Name, out var pkCols))
                     allTables[idx] = t with { PrimaryKey = pkCols };
+            }
+        }
+
+        // ── Apply ALTER TABLE column mutations ────────────────────────────────
+        if (allMutations is { Count: > 0 })
+        {
+            // Build an index for O(1) lookup by table name.
+            var tableIdx = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int idx = 0; idx < allTables.Count; idx++)
+                tableIdx[allTables[idx].Name] = idx;
+
+            foreach (var m in allMutations)
+            {
+                if (!tableIdx.TryGetValue(m.TableName, out var tIdx)) continue;
+                var t = allTables[tIdx];
+
+                switch (m.Kind)
+                {
+                    case SqlDdlParser.AlterTableMutationKind.AddColumn:
+                    {
+                        if (m.Column is null) break;
+                        // Skip if a column with the same name already exists.
+                        if (t.Fields.Any(f => f.Name.Equals(m.Column.Name, StringComparison.OrdinalIgnoreCase)))
+                            break;
+                        var fields = t.Fields.ToList();
+                        if (m.First)
+                            fields.Insert(0, m.Column);
+                        else if (m.After is not null)
+                        {
+                            var afterIdx = fields.FindIndex(
+                                f => f.Name.Equals(m.After, StringComparison.OrdinalIgnoreCase));
+                            fields.Insert(afterIdx >= 0 ? afterIdx + 1 : fields.Count, m.Column);
+                        }
+                        else
+                            fields.Add(m.Column);
+                        allTables[tIdx] = t with { Fields = fields.AsReadOnly() };
+                        t = allTables[tIdx];
+                        break;
+                    }
+
+                    case SqlDdlParser.AlterTableMutationKind.AddForeignKey:
+                    {
+                        if (m.Fk is null) break;
+                        // Qualify the FK target with the default schema if it is unqualified.
+                        // ALTER TABLE … REFERENCES artist → REFERENCES public.artist when --default-schema public.
+                        var fk = (schema is not null && !m.Fk.TargetTable.Contains('.'))
+                            ? m.Fk with { TargetTable = $"{schema}.{m.Fk.TargetTable}" }
+                            : m.Fk;
+                        var fks = t.ForeignKeys.ToList();
+                        fks.Add(fk);
+                        allTables[tIdx] = t with { ForeignKeys = fks.AsReadOnly() };
+                        t = allTables[tIdx];
+                        break;
+                    }
+
+                    case SqlDdlParser.AlterTableMutationKind.AlterColumn:
+                    {
+                        if (m.Column is null) break;
+                        var fields = t.Fields.ToList();
+                        var fIdx = fields.FindIndex(
+                            f => f.Name.Equals(m.Column.Name, StringComparison.OrdinalIgnoreCase));
+                        if (fIdx < 0) break;
+                        // DB-authoritative properties: type, nullable, default.
+                        // Preserve repo-sovereign: description, isMatchColumn.
+                        fields[fIdx] = fields[fIdx] with
+                        {
+                            Type    = m.Column.Type,
+                            Nullable = m.Column.Nullable,
+                            Default  = m.Column.Default,
+                        };
+                        allTables[tIdx] = t with { Fields = fields.AsReadOnly() };
+                        t = allTables[tIdx];
+                        break;
+                    }
+
+                    case SqlDdlParser.AlterTableMutationKind.DropColumn:
+                    {
+                        if (m.ColName is null) break;
+                        var fields = t.Fields
+                            .Where(f => !f.Name.Equals(m.ColName, StringComparison.OrdinalIgnoreCase))
+                            .ToList();
+                        var pk = t.PrimaryKey
+                            .Where(c => !c.Equals(m.ColName, StringComparison.OrdinalIgnoreCase))
+                            .ToList();
+                        // Remove FKs whose sourceField was the dropped column.
+                        var fks = t.ForeignKeys
+                            .Where(fk => !fk.SourceField.Equals(m.ColName, StringComparison.OrdinalIgnoreCase))
+                            .ToList();
+                        allTables[tIdx] = t with
+                        {
+                            Fields      = fields.AsReadOnly(),
+                            PrimaryKey  = pk.AsReadOnly(),
+                            ForeignKeys = fks.AsReadOnly(),
+                        };
+                        t = allTables[tIdx];
+                        break;
+                    }
+
+                    case SqlDdlParser.AlterTableMutationKind.RenameColumn:
+                    {
+                        if (m.ColName is null || m.NewName is null) break;
+                        var fields = t.Fields.Select(f =>
+                            f.Name.Equals(m.ColName, StringComparison.OrdinalIgnoreCase)
+                                ? f with { Name = m.NewName }
+                                : f).ToList();
+                        var pk = t.PrimaryKey.Select(c =>
+                            c.Equals(m.ColName, StringComparison.OrdinalIgnoreCase) ? m.NewName : c).ToList();
+                        // Update FK sourceField when the renamed column is a FK source.
+                        var fks = t.ForeignKeys.Select(fk =>
+                            fk.SourceField.Equals(m.ColName, StringComparison.OrdinalIgnoreCase)
+                                ? fk with { SourceField = m.NewName }
+                                : fk).ToList();
+                        allTables[tIdx] = t with
+                        {
+                            Fields      = fields.AsReadOnly(),
+                            PrimaryKey  = pk.AsReadOnly(),
+                            ForeignKeys = fks.AsReadOnly(),
+                        };
+                        t = allTables[tIdx];
+                        break;
+                    }
+
+                    case SqlDdlParser.AlterTableMutationKind.CreateIndex:
+                    {
+                        if (m.Index is null) break;
+                        // Skip if an index with the same name already exists.
+                        if (t.Indexes.Any(ix => ix.Name.Equals(m.Index.Name, StringComparison.OrdinalIgnoreCase)))
+                            break;
+                        var indexes = t.Indexes.ToList();
+                        indexes.Add(m.Index);
+                        allTables[tIdx] = t with { Indexes = indexes.AsReadOnly() };
+                        t = allTables[tIdx];
+                        break;
+                    }
+                }
             }
         }
 
@@ -299,6 +453,31 @@ public sealed class InitSqlCommand : ManifestSharedCommandBase
             }
         }
 
+        // ── Write view files (CREATE VIEW) — stored alongside table files ────────
+        // Views have IsView = true and field types set to "unknown"; db merge will
+        // populate real types from the live database.
+        int viewsWritten = 0;
+        foreach (var view in allViews)
+        {
+            var outputFile = Path.Combine(outputDir, $"{view.Name}.json");
+            if (!overwrite && File.Exists(outputFile))
+            {
+                OutputFormatter.WriteVerbose($"  Skipped (already exists): {outputFile}", globals);
+                continue;
+            }
+            try
+            {
+                var json = TableDefinitionSerializer.Serialize(view);
+                await writer.WriteAsync(outputFile, json, ct);
+                OutputFormatter.WriteVerbose($"  Written (view): {outputFile}", globals);
+                viewsWritten++;
+            }
+            catch (Exception ex)
+            {
+                OutputFormatter.WriteError($"Failed to write view {outputFile}: {ex.Message}");
+            }
+        }
+
         // ── Scaffold _/manifesta.config.json and _/document-sections/all-tables.json ──
         // Strip any trailing directory separator before computing the parent.  Without this,
         // a path ending in '/' (e.g. "--output-dir ./manifesta/tables/") resolves to the
@@ -358,7 +537,9 @@ public sealed class InitSqlCommand : ManifestSharedCommandBase
         }
 
         OutputFormatter.WriteLine(
-            $"Imported {written} table(s) from SQL DDL" +
+            $"Imported {written} table(s)" +
+            (viewsWritten  > 0 ? $", {viewsWritten} view(s)" : "") +
+            " from SQL DDL" +
             (skipped       > 0 ? $", {skipped} skipped (already exist)" : "") +
             (filesWithDups > 0 ? $", {filesWithDups} file(s) skipped (intra-file duplicate tables — see warnings)" : "") +
             (failed        > 0 ? $", {failed} failed" : "") +
