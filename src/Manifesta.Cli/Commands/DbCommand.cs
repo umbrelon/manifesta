@@ -11,6 +11,11 @@ using Manifesta.Cli;
 namespace Manifesta.Cli.Commands;
 
 // ─── shared helpers ────────────────────────────────────────────────────────────
+// OSS edition: SQL Server is gated behind the enterprise edition for live introspection.
+// Parse() rejects SQL Server; ParseForDdl() accepts it for text-only DDL parsing.
+// The enterprise counterpart (src/Manifesta.Cli/Commands/DbCommand.cs) accepts SQL Server
+// everywhere and returns an extra IDatabaseIntrospector? from LoadLiveTablesAsync.
+// Keep both files in sync when changing provider defaults or schema-filter logic.
 
 file static class DbProviderHelper
 {

@@ -43,6 +43,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Manifesta.Core\Manifesta.Core.csproj" />
+    <ProjectReference Include="..\Manifesta.Cli.Shared\Manifesta.Cli.Shared.csproj" />
     <ProjectReference Include="..\Manifesta.Providers\Manifesta.Providers.csproj" />
     <ProjectReference Include="..\Manifesta.Doc\Manifesta.Doc.csproj" />
   </ItemGroup>

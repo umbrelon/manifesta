@@ -60,7 +60,7 @@ file static class FileInitProviderHelper
 /// SQL Server dialects.  Works with both clean migration scripts and database
 /// dump files (mysqldump --no-data, pg_dump --schema-only).
 /// </summary>
-public sealed class InitSqlCommand : ManifestCommandBase
+public sealed class InitSqlCommand : ManifestSharedCommandBase
 {
     private readonly Option<string>  _input         = new(["--input"],
         "Path to a .sql file or directory of .sql files (required)");
@@ -378,7 +378,7 @@ public sealed class InitSqlCommand : ManifestCommandBase
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// <summary>manifesta init dbml — parse a DBML file and write one table-definition JSON per table.</summary>
-public sealed class InitDbmlCommand : ManifestCommandBase
+public sealed class InitDbmlCommand : ManifestSharedCommandBase
 {
     private readonly Option<string>  _input         = new(["--input"],          "Path to the .dbml file (required)");
     private readonly Option<string?> _outputDir     = new(["--output-dir"],     () => "./tables",            "Directory to write JSON table definition files");
@@ -517,7 +517,7 @@ public sealed class InitDbmlCommand : ManifestCommandBase
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// <summary>manifesta init prisma — parse a Prisma schema (.prisma) and write one table-definition JSON per model.</summary>
-public sealed class InitPrismaCommand : ManifestCommandBase
+public sealed class InitPrismaCommand : ManifestSharedCommandBase
 {
     private readonly Option<string>  _input         = new(["--input"],          "Path to the .prisma file (required)");
     private readonly Option<string?> _outputDir     = new(["--output-dir"],     () => "./tables", "Directory to write JSON table definition files");
