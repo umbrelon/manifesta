@@ -33,6 +33,9 @@ Manifesta OSS lets you bootstrap a schema registry from an existing DBML or Pris
 | `manifesta db drift --ddl-file <path>` | Compare repo definitions against SQL DDL files — all four dialects including SQL Server (OSS); no live connection required |
 | `manifesta db merge --connection <cs>` | Pull live schema changes back into the repository JSON files |
 | `manifesta db merge --input-dir <dir>` | Merge from pre-exported JSON files (air-gapped workflow) |
+| `manifesta dev dump-ir` | Dump the full loaded IR (tables + sections) as JSON or YAML — useful for debugging |
+| `manifesta dev inspect table <name>` | Inspect a single table definition: fields, PKs, FKs, constraints |
+| `manifesta dev graph` | Visualise the schema dependency graph as Mermaid, Graphviz DOT, or JSON |
 
 ---
 
@@ -219,6 +222,7 @@ The schema registry is the hub. `init` and `db merge` write to it; `doc`, `valid
 - [Doc Command](docs/commands-doc.md) — `doc db`
 - [DB Commands](docs/commands-db.md) — `db drift`, `db merge`
 - [Validate Commands](docs/commands-validate.md) — `validate schema`, `validate all`, `validate cross`
+- [Dev Commands](docs/commands-dev.md) — `dev dump-ir`, `dev inspect table`, `dev graph`
 - [Schema Features](docs/schema-features.md) — table.json format, FK kinds, sections, ERDs
 
 ---

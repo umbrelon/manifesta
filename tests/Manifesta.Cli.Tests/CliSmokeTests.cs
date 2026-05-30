@@ -1255,6 +1255,186 @@ public sealed class CliSmokeTests
         finally { Directory.Delete(tmp, recursive: true); }
     }
 
+    // ── dev ───────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task DevHelp_ShowsDumpIrInspectGraph()
+    {
+        if (BinPath is null) return;
+        var (code, stdout, _) = await RunAsync("dev", "--help");
+        code.Should().Be(0);
+        stdout.Should().Contain("dump-ir");
+        stdout.Should().Contain("inspect");
+        stdout.Should().Contain("graph");
+    }
+
+    [Fact]
+    public async Task DevDumpIr_ExitsZeroAndOutputsJson()
+    {
+        if (BinPath is null) return;
+        var tmp = CreateTempRegistry(new Dictionary<string, string>
+        {
+            ["Customer.json"] = """
+                {
+                  "name": "Customer",
+                  "fields": [{ "name": "Id", "type": "int", "nullable": false }],
+                  "primaryKey": ["Id"]
+                }
+                """
+        });
+        try
+        {
+            var (code, stdout, _) = await RunAsync(tmp, "dev", "dump-ir");
+            code.Should().Be(0);
+            stdout.Should().Contain("Customer");
+            stdout.Should().Contain("\"tables\"");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DevDumpIr_YamlFormat_OutputsYaml()
+    {
+        if (BinPath is null) return;
+        var tmp = CreateTempRegistry(new Dictionary<string, string>
+        {
+            ["Customer.json"] = """
+                {
+                  "name": "Customer",
+                  "fields": [{ "name": "Id", "type": "int", "nullable": false }],
+                  "primaryKey": ["Id"]
+                }
+                """
+        });
+        try
+        {
+            var (code, stdout, _) = await RunAsync(tmp, "dev", "dump-ir", "--format", "yaml");
+            code.Should().Be(0);
+            stdout.Should().Contain("Customer");
+            stdout.Should().NotContain("\"tables\"", "YAML output must not use JSON braces");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DevInspectTable_Found_ExitsZeroAndShowsFields()
+    {
+        if (BinPath is null) return;
+        var tmp = CreateTempRegistry(new Dictionary<string, string>
+        {
+            ["Customer.json"] = """
+                {
+                  "name": "Customer",
+                  "fields": [{ "name": "Id", "type": "int", "nullable": false }],
+                  "primaryKey": ["Id"]
+                }
+                """
+        });
+        try
+        {
+            var (code, stdout, _) = await RunAsync(tmp, "dev", "inspect", "table", "Customer");
+            code.Should().Be(0);
+            stdout.Should().Contain("Customer");
+            stdout.Should().Contain("Primary key");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DevInspectTable_NotFound_ExitsCode4()
+    {
+        if (BinPath is null) return;
+        var tmp = CreateTempRegistry(new Dictionary<string, string>
+        {
+            ["Customer.json"] = """
+                {
+                  "name": "Customer",
+                  "fields": [{ "name": "Id", "type": "int", "nullable": false }],
+                  "primaryKey": ["Id"]
+                }
+                """
+        });
+        try
+        {
+            var (code, _, stderr) = await RunAsync(tmp, "dev", "inspect", "table", "DoesNotExist");
+            code.Should().Be(4);
+            stderr.Should().Contain("not found");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DevGraph_Mermaid_ExitsZeroAndContainsErDiagram()
+    {
+        if (BinPath is null) return;
+        var tmp = CreateTempRegistry(new Dictionary<string, string>
+        {
+            ["Customer.json"] = """
+                {
+                  "name": "Customer",
+                  "fields": [{ "name": "Id", "type": "int", "nullable": false }],
+                  "primaryKey": ["Id"]
+                }
+                """
+        });
+        try
+        {
+            var (code, stdout, _) = await RunAsync(tmp, "dev", "graph", "--format", "mermaid");
+            code.Should().Be(0);
+            stdout.Should().Contain("erDiagram");
+            stdout.Should().Contain("Customer");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DevGraph_Dot_ExitsZeroAndContainsDiGraph()
+    {
+        if (BinPath is null) return;
+        var tmp = CreateTempRegistry(new Dictionary<string, string>
+        {
+            ["Customer.json"] = """
+                {
+                  "name": "Customer",
+                  "fields": [{ "name": "Id", "type": "int", "nullable": false }],
+                  "primaryKey": ["Id"]
+                }
+                """
+        });
+        try
+        {
+            var (code, stdout, _) = await RunAsync(tmp, "dev", "graph", "--format", "dot");
+            code.Should().Be(0);
+            stdout.Should().Contain("digraph schema");
+            stdout.Should().Contain("Customer");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DevGraph_Json_ExitsZeroAndContainsNodes()
+    {
+        if (BinPath is null) return;
+        var tmp = CreateTempRegistry(new Dictionary<string, string>
+        {
+            ["Customer.json"] = """
+                {
+                  "name": "Customer",
+                  "fields": [{ "name": "Id", "type": "int", "nullable": false }],
+                  "primaryKey": ["Id"]
+                }
+                """
+        });
+        try
+        {
+            var (code, stdout, _) = await RunAsync(tmp, "dev", "graph", "--format", "json");
+            code.Should().Be(0);
+            stdout.Should().Contain("\"nodes\"");
+            stdout.Should().Contain("Customer");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
     [Fact]
     public async Task InitSql_DefaultSchemaAndSchemaFilter_WorkTogether()
     {

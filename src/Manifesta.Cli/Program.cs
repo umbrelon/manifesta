@@ -18,6 +18,7 @@ root.AddCommand(new InitCommand());
 root.AddCommand(new DbCommand());
 root.AddCommand(new DocCommand());
 root.AddCommand(new ValidateCommand());
+root.AddCommand(new DevCommand());
 root.AddCommand(new VersionCommand());
 
 // ─── Pipeline (middleware) ─────────────────────────────────────────────────
