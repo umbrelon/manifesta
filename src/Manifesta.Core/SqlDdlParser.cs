@@ -226,6 +226,35 @@ public sealed class SqlDdlParser
                 continue;
             }
 
+            // PostgreSQL dollar-quoted string: $tag$...$tag$
+            // Erase the body so DDL inside stored functions is invisible to the parser.
+            // The tag is $<identifier>$ or $$ (empty tag).
+            if (sql[i] == '$')
+            {
+                // Collect the tag: $ + optional word chars + $
+                int tagStart = i;
+                int j = i + 1;
+                while (j < sql.Length && (char.IsLetterOrDigit(sql[j]) || sql[j] == '_'))
+                    j++;
+                if (j < sql.Length && sql[j] == '$')
+                {
+                    // Valid dollar-quote tag found
+                    var tag = sql[tagStart..(j + 1)]; // e.g. "$_$" or "$$"
+                    int bodyStart = j + 1;
+                    int closeIdx = sql.IndexOf(tag, bodyStart, StringComparison.Ordinal);
+                    if (closeIdx >= 0)
+                    {
+                        // Emit the opening tag, blank the body, emit the closing tag
+                        sb.Append(tag);
+                        sb.Append(' ', closeIdx - bodyStart);
+                        sb.Append(tag);
+                        i = closeIdx + tag.Length;
+                        continue;
+                    }
+                    // Unterminated dollar-quote — fall through and emit the $ literally
+                }
+            }
+
             sb.Append(sql[i++]);
         }
 
@@ -433,12 +462,20 @@ public sealed class SqlDdlParser
         // constraint entries so they are routed to ParseConstraintEntry and
         // silently skipped (like any other inline KEY/INDEX in v1), rather than
         // being misread as a column named "SPATIAL" or "FULLTEXT".
+        // NOTE: FULLTEXT is also a valid PostgreSQL column *name* (e.g. Pagila's
+        // `fulltext tsvector` column), so only treat it as a constraint marker when
+        // it is immediately followed by KEY or INDEX.
         // SQL Server PERIOD FOR SYSTEM_TIME (col1, col2) appears inside temporal
         // table CREATE TABLE bodies and must be similarly skipped — otherwise the
         // parser creates a phantom column named "PERIOD".
-        if (tokens[idx].Equals("SPATIAL",  StringComparison.OrdinalIgnoreCase) ||
-            tokens[idx].Equals("FULLTEXT", StringComparison.OrdinalIgnoreCase) ||
-            tokens[idx].Equals("PERIOD",   StringComparison.OrdinalIgnoreCase))
+        if (tokens[idx].Equals("SPATIAL", StringComparison.OrdinalIgnoreCase) ||
+            tokens[idx].Equals("PERIOD",  StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (tokens[idx].Equals("FULLTEXT", StringComparison.OrdinalIgnoreCase) &&
+            idx + 1 < tokens.Count &&
+            (tokens[idx + 1].Equals("KEY",   StringComparison.OrdinalIgnoreCase) ||
+             tokens[idx + 1].Equals("INDEX", StringComparison.OrdinalIgnoreCase)))
             return true;
 
         return IsConstraintTypeKeyword(tokens[idx]);
@@ -569,6 +606,11 @@ public sealed class SqlDdlParser
                 }
             }
         }
+
+        // PostgreSQL array suffix — the tokenizer turns `[]` into a bracket-quoted
+        // token immediately after the base type (e.g. integer[], text[], varchar[]).
+        if (i < tokens.Count && tokens[i] == "[]")
+            typeTokens.Add(tokens[i++]);
 
         // Join: words separated by spaces, but paren groups attach directly to
         // the preceding word (e.g. "int(11)" not "int (11)", "character varying(255)")
@@ -1140,13 +1182,26 @@ public sealed class SqlDdlParser
                 continue;
             }
 
-            // Word / keyword / number — also captures AUTO_INCREMENT with underscore
+            // Word / keyword / number — also captures AUTO_INCREMENT with underscore.
+            // When a word is immediately followed by '.' and another word (no whitespace),
+            // the two are combined into a single schema-qualified token (e.g. public.year,
+            // public.mpaa_rating) so the type-builder receives the full qualified name.
             if (char.IsLetterOrDigit(c) || c == '_')
             {
                 int start = i;
                 while (i < text.Length &&
                        (char.IsLetterOrDigit(text[i]) || text[i] == '_'))
                     i++;
+                // Optional single schema qualifier: word.word (no spaces around dot)
+                if (i < text.Length && text[i] == '.' &&
+                    i + 1 < text.Length &&
+                    (char.IsLetterOrDigit(text[i + 1]) || text[i + 1] == '_' || text[i + 1] == '"'))
+                {
+                    i++; // consume the dot
+                    while (i < text.Length &&
+                           (char.IsLetterOrDigit(text[i]) || text[i] == '_'))
+                        i++;
+                }
                 tokens.Add(text[start..i]);
                 continue;
             }
@@ -1319,16 +1374,53 @@ public sealed class SqlDdlParser
         return result.ToLowerInvariant();
     }
 
+    // Strips explicit precision from PostgreSQL timestamp/time types when no precision
+    // was declared in the DDL. information_schema returns the type without precision;
+    // pg_dump writes the default precision (6) explicitly. Storing without precision
+    // matches what the introspector returns, avoiding spurious drift.
+    private static readonly Regex s_pgTimestampPrecision = new(
+        @"^(timestamp|time)\(\d+\)(.*)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static string NormalizePostgres(string raw)
     {
-        var lower = raw.ToLowerInvariant();
-        return lower switch
+        var lower = raw.ToLowerInvariant().Trim();
+
+        // Array suffix: normalise base type then re-append []
+        // The parser produces "integer []" or "character varying []" etc.
+        bool isArray = lower.EndsWith(" []") || lower.EndsWith("[]");
+        if (isArray)
         {
-            "serial"      => "integer",
-            "bigserial"   => "bigint",
-            "smallserial" => "smallint",
-            _             => lower,
-        };
+            var baseStr = lower.EndsWith(" []") ? lower[..^3].Trim() : lower[..^2];
+            return NormalizePostgresBase(baseStr) + "[]";
+        }
+
+        return NormalizePostgresBase(lower);
+    }
+
+    private static string NormalizePostgresBase(string lower)
+    {
+        // Serial shorthands
+        if (lower == "serial")      return "integer";
+        if (lower == "bigserial")   return "bigint";
+        if (lower == "smallserial") return "smallint";
+
+        // character varying → varchar  /  character(N) → char(N)
+        if (lower == "character varying") return "varchar";
+        if (lower.StartsWith("character varying(", StringComparison.Ordinal))
+            return "varchar" + lower["character varying".Length..];
+        if (lower == "character") return "char";
+        if (lower.StartsWith("character(", StringComparison.Ordinal))
+            return "char" + lower["character".Length..];
+
+        // timestamp(N) / time(N) — strip explicit default precision (fix 2)
+        // pg_dump writes e.g. "timestamp(6) without time zone"; information_schema
+        // returns "timestamp without time zone" (no precision for the default).
+        var m = s_pgTimestampPrecision.Match(lower);
+        if (m.Success)
+            return m.Groups[1].Value + m.Groups[2].Value; // e.g. "timestamp without time zone"
+
+        return lower;
     }
 
     private static string NormalizeSqlite(string raw) =>

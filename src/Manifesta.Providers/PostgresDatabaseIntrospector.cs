@@ -489,9 +489,37 @@ public sealed class PostgresDatabaseIntrospector : DatabaseIntrospectorBase
                 (true, false) => $"{dataType}({numericPrecision})",
                 _             => dataType
             },
-            // USER-DEFINED covers jsonb, json, custom enum/composite types; ARRAY covers array types.
-            "user-defined" or "array" => udtName,
+            // USER-DEFINED covers jsonb, json, custom enum/composite types.
+            "user-defined" => udtName,
+            // ARRAY: map internal PostgreSQL array type names (e.g. _int4) to the
+            // human-readable [] form (integer[]) to match what the DDL parser produces.
+            "array" => MapPostgresArrayType(udtName),
             _                         => dataType
         };
     }
+
+    // Maps PostgreSQL internal array type names (from information_schema.columns.udt_name)
+    // to the human-readable [] form used in DDL and stored in the Manifesta registry.
+    private static string MapPostgresArrayType(string udtName) =>
+        udtName.ToLowerInvariant() switch
+        {
+            "_int2"        => "smallint[]",
+            "_int4"        => "integer[]",
+            "_int8"        => "bigint[]",
+            "_float4"      => "real[]",
+            "_float8"      => "double precision[]",
+            "_numeric"     => "numeric[]",
+            "_bool"        => "boolean[]",
+            "_text"        => "text[]",
+            "_varchar"     => "varchar[]",
+            "_bpchar"      => "char[]",
+            "_inet"        => "inet[]",
+            "_date"        => "date[]",
+            "_timestamp"   => "timestamp without time zone[]",
+            "_timestamptz" => "timestamp with time zone[]",
+            "_uuid"        => "uuid[]",
+            "_jsonb"       => "jsonb[]",
+            "_json"        => "json[]",
+            var other      => other,   // fallback: keep internal name
+        };
 }

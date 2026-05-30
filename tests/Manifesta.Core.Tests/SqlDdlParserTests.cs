@@ -668,14 +668,23 @@ public sealed class SqlDdlParserTests
     }
 
     [Fact]
-    public void Postgres_CharacterVarying_TypePreserved()
+    public void Postgres_CharacterVarying_NormalisedToVarchar()
     {
         const string sql = """
             CREATE TABLE t (name CHARACTER VARYING(255) NOT NULL);
             """;
 
         var r = _parser.Parse(sql, DbProvider.Postgres);
-        r.Tables[0].Fields[0].Type.Should().Be("character varying(255)");
+        r.Tables[0].Fields[0].Type.Should().Be("varchar(255)");
+    }
+
+    [Fact]
+    public void Postgres_CharacterVaryingNoLength_NormalisedToVarchar()
+    {
+        const string sql = "CREATE TABLE t (name CHARACTER VARYING NOT NULL);";
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("varchar");
     }
 
     [Fact]
@@ -699,14 +708,36 @@ public sealed class SqlDdlParserTests
     }
 
     [Fact]
-    public void Postgres_TimestampWithPrecisionAndTimeZone_TypePreserved()
+    public void Postgres_TimestampWithPrecisionAndTimeZone_PrecisionStripped()
     {
+        // pg_dump writes timestamp(6) with explicit default precision;
+        // information_schema returns without precision. Normaliser strips it.
         const string sql = """
             CREATE TABLE t (created_at TIMESTAMP(6) WITH TIME ZONE NOT NULL);
             """;
 
         var r = _parser.Parse(sql, DbProvider.Postgres);
-        r.Tables[0].Fields[0].Type.Should().Be("timestamp(6) with time zone");
+        r.Tables[0].Fields[0].Type.Should().Be("timestamp with time zone");
+    }
+
+    [Fact]
+    public void Postgres_TimestampWithoutTimeZoneAndPrecision_PrecisionStripped()
+    {
+        const string sql = """
+            CREATE TABLE t (created_at TIMESTAMP(6) WITHOUT TIME ZONE NOT NULL);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("timestamp without time zone");
+    }
+
+    [Fact]
+    public void Postgres_TimeWithPrecision_PrecisionStripped()
+    {
+        const string sql = "CREATE TABLE t (start_at TIME(3) WITHOUT TIME ZONE NOT NULL);";
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("time without time zone");
     }
 
     [Fact]
@@ -1666,5 +1697,216 @@ public sealed class SqlDdlParserTests
 
         r.Tables[0].Fields.Should().HaveCount(4,
             "exactly Id, Name, ValidFrom, ValidTo — no phantom PERIOD column");
+    }
+
+    // ── PostgreSQL array type tests ───────────────────────────────────────────
+
+    [Fact]
+    public void Postgres_IntegerArray_SuffixPreserved()
+    {
+        const string sql = "CREATE TABLE t (ids integer[] NOT NULL);";
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("integer[]");
+    }
+
+    [Fact]
+    public void Postgres_TextArray_SuffixPreserved()
+    {
+        const string sql = "CREATE TABLE t (tags text[] NOT NULL);";
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("text[]");
+    }
+
+    [Fact]
+    public void Postgres_CharacterVaryingArray_NormalisedToVarcharArray()
+    {
+        const string sql = "CREATE TABLE t (names character varying[] NOT NULL);";
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("varchar[]");
+    }
+
+    [Fact]
+    public void Postgres_IntegerArrayWithDefault_DefaultCaptured()
+    {
+        // pg_dump writes DEFAULT '{}'::integer[]; parser should capture {} as default
+        const string sql = """
+            CREATE TABLE t (ids integer[] DEFAULT '{}' NOT NULL);
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("integer[]");
+        r.Tables[0].Fields[0].Default.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Postgres_MixedColumns_ArrayAndNonArray_BothCorrect()
+    {
+        // Real Discourse DDL pattern: mix of regular and array columns
+        const string sql = """
+            CREATE TABLE ai_agents (
+                id bigint NOT NULL,
+                name character varying(100) NOT NULL,
+                allowed_group_ids integer[] DEFAULT '{}' NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        var fields = r.Tables[0].Fields;
+        fields.Should().HaveCount(3);
+        fields.Single(f => f.Name == "id").Type.Should().Be("bigint");
+        fields.Single(f => f.Name == "name").Type.Should().Be("varchar(100)");
+        fields.Single(f => f.Name == "allowed_group_ids").Type.Should().Be("integer[]");
+    }
+
+    // ── Schema-qualified type and FULLTEXT column name (Pagila gaps) ──────────
+
+    [Fact]
+    public void Postgres_SchemaQualifiedDomainType_CapturedFully()
+    {
+        // Pagila uses public.year and public.mpaa_rating as column types.
+        // The tokenizer must not split on the dot.
+        const string sql = """
+            CREATE TABLE film (
+                release_year public.year,
+                rating public.mpaa_rating DEFAULT 'G'
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields.Should().HaveCount(2);
+        r.Tables[0].Fields[0].Type.Should().Be("public.year");
+        r.Tables[0].Fields[1].Type.Should().Be("public.mpaa_rating");
+    }
+
+    [Fact]
+    public void Postgres_ColumnNamedFulltext_NotTreatedAsConstraint()
+    {
+        // "fulltext" is a valid PostgreSQL column name (used in Pagila for tsvector).
+        // IsConstraintEntry must not skip it — only "FULLTEXT KEY/INDEX" is MySQL syntax.
+        const string sql = """
+            CREATE TABLE film (
+                id integer NOT NULL,
+                fulltext tsvector NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields.Should().HaveCount(2);
+        var ft = r.Tables[0].Fields.Single(f => f.Name == "fulltext");
+        ft.Type.Should().Be("tsvector");
+        ft.Nullable.Should().BeFalse();
+    }
+
+    [Fact]
+    public void MySQL_FulltextKey_StillTreatedAsConstraint()
+    {
+        // MySQL FULLTEXT KEY / FULLTEXT INDEX must still be skipped (not read as a column).
+        const string sql = """
+            CREATE TABLE articles (
+                id int NOT NULL,
+                body text NOT NULL,
+                FULLTEXT KEY idx_body (body)
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.MySql);
+        r.Tables[0].Fields.Should().HaveCount(2,
+            "FULLTEXT KEY is an index declaration, not a column");
+    }
+
+    // ── character(N) → char(N) normalisation ──────────────────────────────────
+
+    [Fact]
+    public void Postgres_CharacterNoLength_NormalisedToChar()
+    {
+        const string sql = """
+            CREATE TABLE t (
+                code character NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("char",
+            "bare 'character' is the SQL long form of 'char'");
+    }
+
+    [Fact]
+    public void Postgres_CharacterWithLength_NormalisedToChar()
+    {
+        const string sql = """
+            CREATE TABLE t (
+                code character(10) NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("char(10)",
+            "'character(N)' must normalise to 'char(N)'");
+    }
+
+    [Fact]
+    public void Postgres_CharacterVaryingUnaffectedByCharFix()
+    {
+        // Regression: 'character varying' must not accidentally match the 'character' prefix check
+        const string sql = """
+            CREATE TABLE t (
+                name character varying(100) NOT NULL
+            );
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables[0].Fields[0].Type.Should().Be("varchar(100)",
+            "'character varying' must still normalise to 'varchar', not 'char varying'");
+    }
+
+    // ── Dollar-quote function body erased from DDL ────────────────────────────
+
+    [Fact]
+    public void Postgres_DollarQuotedFunctionBody_PhantomTableNotCreated()
+    {
+        // A CREATE TEMPORARY TABLE inside a $_$-delimited function body must not
+        // appear in the parse result.  This covers the Pagila rewards_report gap.
+        const string sql = """
+            CREATE TABLE real_table (
+                id integer NOT NULL
+            );
+
+            CREATE FUNCTION rewards_report() RETURNS void AS $_$
+            DECLARE
+                tmpSQL text;
+            BEGIN
+                CREATE TEMPORARY TABLE tmpCustomer (customer_id INTEGER NOT NULL PRIMARY KEY);
+                tmpSQL := 'SELECT 1';
+            END
+            $_$ LANGUAGE plpgsql;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables.Should().HaveCount(1, "tmpCustomer lives inside a dollar-quoted function body and must be erased");
+        r.Tables[0].Name.Should().Be("real_table");
+    }
+
+    [Fact]
+    public void Postgres_EmptyTagDollarQuote_BodyErased()
+    {
+        // $$ (empty tag) is the most common dollar-quote delimiter in PostgreSQL.
+        const string sql = """
+            CREATE TABLE orders (
+                id integer NOT NULL
+            );
+
+            CREATE FUNCTION do_nothing() RETURNS void AS $$
+            BEGIN
+                CREATE TEMPORARY TABLE ghost (x integer);
+            END
+            $$ LANGUAGE plpgsql;
+            """;
+
+        var r = _parser.Parse(sql, DbProvider.Postgres);
+        r.Tables.Should().HaveCount(1, "ghost table inside $$ body must not appear in parse result");
+        r.Tables[0].Name.Should().Be("orders");
     }
 }
