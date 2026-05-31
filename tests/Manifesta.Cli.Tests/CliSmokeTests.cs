@@ -252,7 +252,7 @@ public sealed class CliSmokeTests
         finally { Directory.Delete(tmp, recursive: true); }
     }
 
-    // ── db drift --ddl-file ───────────────────────────────────────────────────
+    // ── db drift --ddl ────────────────────────────────────────────────────────
 
     // Shared DDL / repo JSON used across multiple DDL drift tests.
     private const string DdlCustomerSql = """
@@ -280,8 +280,8 @@ public sealed class CliSmokeTests
         if (BinPath is null) return;
         var (code, stdout, _) = await RunAsync("db", "drift", "--help");
         code.Should().Be(0);
-        stdout.Should().Contain("--ddl-file");
-        stdout.Should().Contain("sqlserver");   // mentioned in --ddl-file description
+        stdout.Should().Contain("--ddl");
+        stdout.Should().Contain("sqlserver");   // mentioned in --ddl description
     }
 
     [Fact]
@@ -295,7 +295,7 @@ public sealed class CliSmokeTests
             code.Should().Be(4);
             stderr.Should().Contain("--connection");
             stderr.Should().Contain("--input-dir");
-            stderr.Should().Contain("--ddl-file");
+            stderr.Should().Contain("--ddl");
         }
         finally { Directory.Delete(tmp, recursive: true); }
     }
@@ -308,7 +308,7 @@ public sealed class CliSmokeTests
         try
         {
             var (code, _, stderr) = await RunAsync(tmp,
-                "db", "drift", "--ddl-file", "schema.sql", "--input-dir", ".");
+                "db", "drift", "--ddl", "schema.sql", "--input-dir", ".");
             code.Should().Be(4);
             stderr.Should().Contain("mutually exclusive");
         }
@@ -327,7 +327,7 @@ public sealed class CliSmokeTests
             await File.WriteAllTextAsync(ddl, DdlCustomerSql);
 
             var (code, stdout, stderr) = await RunAsync(tmp,
-                "db", "drift", "--ddl-file", ddl, "--provider", "mysql");
+                "db", "drift", "--ddl", ddl, "--provider", "mysql");
             code.Should().Be(0, because: stderr);
             stdout.Should().Contain("No drift detected");
         }
@@ -347,7 +347,7 @@ public sealed class CliSmokeTests
             await File.WriteAllTextAsync(ddl, DdlCustomerSql.Replace("VARCHAR(255)", "VARCHAR(100)"));
 
             var (code, stdout, stderr) = await RunAsync(tmp,
-                "db", "drift", "--ddl-file", ddl, "--provider", "mysql");
+                "db", "drift", "--ddl", ddl, "--provider", "mysql");
             code.Should().Be(1, because: stderr);
             stdout.Should().Contain("Drift detected");
         }
@@ -355,7 +355,7 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
-    public async Task DbDriftDdl_ParseError_ExitsOne()
+    public async Task DbDriftDdl_ParseError_ExitsCode4()
     {
         if (BinPath is null) return;
         var tmp = CreateTempRegistry(new());
@@ -365,32 +365,9 @@ public sealed class CliSmokeTests
             await File.WriteAllTextAsync(ddl, "this is not valid SQL CREATE TABLE garbage (((");
 
             var (code, _, _) = await RunAsync(tmp,
-                "db", "drift", "--ddl-file", ddl, "--provider", "mysql");
-            // No tables parsed + errors → exit 1
-            code.Should().BeOneOf(1, 5);
-        }
-        finally { Directory.Delete(tmp, recursive: true); }
-    }
-
-    [Fact]
-    public async Task DbDriftDdl_ParseError_WarnOnly_ExitsZero()
-    {
-        if (BinPath is null) return;
-        // Repo has one table; DDL file has parse errors but also one valid table
-        // that matches the repo → --warn-only should exit 0 (best-effort diff).
-        var repo = new Dictionary<string, string> { ["dbo.Customer.json"] = RepoCustomerJson };
-        var tmp  = CreateTempRegistry(repo);
-        try
-        {
-            // One valid table + one deliberately broken statement after it
-            var ddl = Path.Combine(tmp, "schema.sql");
-            await File.WriteAllTextAsync(ddl,
-                DdlCustomerSql + "\n\nCREATE TABLE Broken ( col UNCLOSED");
-
-            var (code, stdout, _) = await RunAsync(tmp,
-                "db", "drift", "--ddl-file", ddl, "--provider", "mysql", "--warn-only");
-            code.Should().Be(0);
-            stdout.Should().Contain("No drift detected");
+                "db", "drift", "--ddl", ddl, "--provider", "mysql");
+            // Parse errors block the diff → exit 4 (config/invocation error)
+            code.Should().Be(4);
         }
         finally { Directory.Delete(tmp, recursive: true); }
     }
@@ -425,7 +402,7 @@ public sealed class CliSmokeTests
                 """);
 
             var (code, stdout, stderr) = await RunAsync(tmp,
-                "db", "drift", "--ddl-file", ddl, "--provider", "sqlserver");
+                "db", "drift", "--ddl", ddl, "--provider", "sqlserver");
             code.Should().Be(0, because: stderr);
             stdout.Should().Contain("No drift detected");
         }
@@ -433,79 +410,37 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
-    public async Task DbDriftDdl_Directory_NoDrift_ExitsZero()
+    public async Task DbDriftDdl_MultipleFiles_MergedCorrectly()
     {
         if (BinPath is null) return;
-        var repo = new Dictionary<string, string> { ["dbo.Customer.json"] = RepoCustomerJson };
-        var tmp  = CreateTempRegistry(repo);
+        var repo = new Dictionary<string, string>
+        {
+            ["dbo.Customer.json"] = RepoCustomerJson,
+            ["dbo.Order.json"] = """
+                {
+                  "name": "dbo.Order",
+                  "fields": [
+                    { "name": "Id", "type": "int", "nullable": false }
+                  ],
+                  "primaryKey": ["Id"]
+                }
+                """
+        };
+        var tmp = CreateTempRegistry(repo);
         try
         {
-            var ddlDir = Path.Combine(tmp, "ddl");
-            Directory.CreateDirectory(ddlDir);
-            await File.WriteAllTextAsync(Path.Combine(ddlDir, "customer.sql"), DdlCustomerSql);
-
-            var (code, _, stderr) = await RunAsync(tmp,
-                "db", "drift", "--ddl-file", ddlDir, "--provider", "mysql");
-            code.Should().Be(0, because: stderr);
-        }
-        finally { Directory.Delete(tmp, recursive: true); }
-    }
-
-    [Fact]
-    public async Task DbDriftDdl_Recursive_FindsNestedFile()
-    {
-        if (BinPath is null) return;
-        var repo = new Dictionary<string, string> { ["dbo.Customer.json"] = RepoCustomerJson };
-        var tmp  = CreateTempRegistry(repo);
-        try
-        {
-            var subDir = Path.Combine(tmp, "ddl", "sub");
-            Directory.CreateDirectory(subDir);
-            await File.WriteAllTextAsync(Path.Combine(subDir, "customer.sql"), DdlCustomerSql);
-
-            // Without --recursive: file not found → error
-            var ddlDir = Path.Combine(tmp, "ddl");
-            var (code1, _, _) = await RunAsync(tmp,
-                "db", "drift", "--ddl-file", ddlDir, "--provider", "mysql");
-            code1.Should().Be(5);   // FatalSchemaErrors — no files found
-
-            // With --recursive: table found and matches → no drift
-            var (code2, stdout2, stderr2) = await RunAsync(tmp,
-                "db", "drift", "--ddl-file", ddlDir, "--provider", "mysql", "--recursive");
-            code2.Should().Be(0, because: stderr2);
-            stdout2.Should().Contain("No drift detected");
-        }
-        finally { Directory.Delete(tmp, recursive: true); }
-    }
-
-    [Fact]
-    public async Task DbDriftDdl_PathGlob_FiltersSubdir()
-    {
-        if (BinPath is null) return;
-        // Repo has only Customer; live DDL directory has Customer + Order.
-        // A path glob targeting only the customer file should → no drift.
-        var repo = new Dictionary<string, string> { ["dbo.Customer.json"] = RepoCustomerJson };
-        var tmp  = CreateTempRegistry(repo);
-        try
-        {
-            var ddlDir = Path.Combine(tmp, "ddl");
-            var v1Dir  = Path.Combine(ddlDir, "v1");
-            var v2Dir  = Path.Combine(ddlDir, "v2");
-            Directory.CreateDirectory(v1Dir);
-            Directory.CreateDirectory(v2Dir);
-
-            await File.WriteAllTextAsync(Path.Combine(v1Dir, "customer.sql"), DdlCustomerSql);
-            await File.WriteAllTextAsync(Path.Combine(v2Dir, "order.sql"), """
+            var ddl1 = Path.Combine(tmp, "customer.sql");
+            var ddl2 = Path.Combine(tmp, "order.sql");
+            await File.WriteAllTextAsync(ddl1, DdlCustomerSql);
+            await File.WriteAllTextAsync(ddl2, """
                 CREATE TABLE `dbo.Order` (
                     Id INT NOT NULL,
                     PRIMARY KEY (Id)
                 );
                 """);
 
-            // Only process v1/ — dbo.Order is excluded
             var (code, stdout, stderr) = await RunAsync(tmp,
-                "db", "drift", "--ddl-file", ddlDir,
-                "--provider", "mysql", "--pattern", "v1/*.sql");
+                "db", "drift", "--ddl", $"{ddl1},{ddl2}", "--provider", "mysql");
             code.Should().Be(0, because: stderr);
             stdout.Should().Contain("No drift detected");
         }

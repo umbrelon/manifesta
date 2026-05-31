@@ -226,7 +226,7 @@ Logical and virtual FKs are always ignored — they are repo-sovereign and have 
 
 ## db merge
 
-Pulls structural changes from a live database (or pre-exported JSON files) into the registry JSON files. Merges only DB-authoritative properties — all repo-sovereign metadata is preserved.
+Pulls structural changes from a live database, pre-exported JSON files, or SQL DDL files into the registry JSON files. Merges only DB-authoritative properties — all repo-sovereign metadata is preserved.
 
 ```bash
 # Pull changes from a live MySQL database
@@ -237,6 +237,10 @@ manifesta db merge --provider postgres --connection "Host=localhost;Database=myd
 
 # Merge from pre-exported JSON files (air-gapped workflow)
 manifesta db merge --input-dir ./exported-tables
+
+# Merge from SQL DDL files (no live connection required; SQL Server supported in OSS)
+manifesta db merge --ddl schema.sql --provider sqlserver
+manifesta db merge --ddl schema.sql,views.sql --provider postgres
 
 # Also remove columns that no longer exist in the DB
 manifesta db merge --connection "..." --remove-deleted-columns
@@ -261,8 +265,9 @@ manifesta db merge --connection "..." --no-report
 
 | Flag | Required | Default | Description |
 |------|----------|---------|-------------|
-| `--connection` | One of these | — | ADO.NET connection string for the live database |
-| `--input-dir` | One of these | — | Directory of pre-exported `table.json` files to treat as the live snapshot |
+| `--connection` | One of three | — | ADO.NET connection string for the live database |
+| `--input-dir` | One of three | — | Directory of pre-exported `table.json` files to treat as the live snapshot |
+| `--ddl` | One of three | — | Comma-separated paths to `.sql` DDL files. Supports `mysql`, `postgres`, `sqlite`, and `sqlserver` (no live connection required). |
 | `--provider` | No | `mysql` | Database provider: `mysql`, `postgres`, or `sqlite`. SQL Server requires the full edition. |
 | `--schema` | No | — | Comma-separated schemas to restrict the merge (e.g. `public,app`). Ignored for MySQL. |
 | `--remove-deleted-columns` | No | false | Remove fields from registry files when they are absent from the live database (opt-in) |
@@ -273,9 +278,10 @@ manifesta db merge --connection "..." --no-report
 | `--output` | No | — | Full path for the merge report file |
 | `--output-dir` | No | `.` | Directory for the merge report file |
 
-`--connection` and `--input-dir` are mutually exclusive. Exactly one must be provided.
+`--connection`, `--input-dir`, and `--ddl` are mutually exclusive. Exactly one must be provided.
 `--skip-new-tables` and `--new-table-dir` are mutually exclusive.
 `--remove-deleted-tables` requires `--remove-deleted-columns`.
+`--force-capture-reference-data` requires `--connection` and is incompatible with `--input-dir` and `--ddl`.
 
 ---
 
