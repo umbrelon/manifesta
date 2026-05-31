@@ -146,10 +146,14 @@ A dictionary of named database-class definitions. Each key is an arbitrary label
 
 A dictionary of named database instances. Each key is a logical name you choose (e.g. `"central-db"`, `"partner-eu"`).
 
+Each entry must specify exactly one **source** — the data used when `db tenant-drift` checks this database for schema drift. The three sources are mutually exclusive:
+
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `type` | string | Yes | — | One of the keys declared in `tenants.types`. |
-| `connection` | string | Yes | — | Connection string for this database instance. Use environment variable substitution in CI rather than committing secrets. |
+| `connection` | string | One of three | — | Connection string for live introspection. Use environment variable substitution in CI rather than committing secrets. SQL Server requires the full edition. |
+| `inputDir` | string | One of three | — | Directory of pre-exported JSON files (output of `db export`). Enables air-gapped drift detection without a live database connection. |
+| `ddl` | string | One of three | — | Comma-separated paths to DDL SQL files (`CREATE TABLE` statements). Enables offline drift from schema files. SQL Server DDL accepted in the community edition (text-only parsing, no live connection). |
 | `parent` | string | No | — | Logical name of the parent database in the topology. Omit on the root database. |
 | `sections` | string[] | No | `[]` | Section (module) names installed on this database. Only tables belonging to these sections are checked for drift. |
 
@@ -170,6 +174,18 @@ A dictionary of named database instances. Each key is a logical name you choose 
         "type": "partner",
         "parent": "central-db",
         "connection": "Server=eu.db;Database=PartnerEU;...",
+        "sections": ["Core"]
+      },
+      "partner-us-air-gapped": {
+        "type": "partner",
+        "parent": "central-db",
+        "inputDir": "./snapshots/partner-us",
+        "sections": ["Core"]
+      },
+      "partner-offline": {
+        "type": "partner",
+        "parent": "central-db",
+        "ddl": "./ddl/partner-offline.sql",
         "sections": ["Core"]
       }
     }

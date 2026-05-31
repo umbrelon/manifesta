@@ -229,12 +229,33 @@ public sealed class TenantTypeDefinition
 
 /// <summary>
 /// A named database instance in the tenant topology.
+/// Exactly one of <see cref="Connection"/>, <see cref="InputDir"/>, or <see cref="Ddl"/> must be set.
 /// </summary>
 public sealed class TenantDatabaseEntry
 {
-    /// <summary>Connection string for this database instance.</summary>
+    /// <summary>
+    /// Connection string for live introspection.
+    /// Mutually exclusive with <see cref="InputDir"/> and <see cref="Ddl"/>.
+    /// </summary>
     [JsonPropertyName("connection")]
-    public string Connection { get; set; } = "";
+    public string? Connection { get; set; }
+
+    /// <summary>
+    /// Directory of pre-exported JSON files (output of <c>db export</c>).
+    /// Mutually exclusive with <see cref="Connection"/> and <see cref="Ddl"/>.
+    /// Enables air-gapped drift detection without a live database connection.
+    /// </summary>
+    [JsonPropertyName("inputDir")]
+    public string? InputDir { get; set; }
+
+    /// <summary>
+    /// Comma-separated paths to DDL SQL files (<c>CREATE TABLE</c> statements).
+    /// Mutually exclusive with <see cref="Connection"/> and <see cref="InputDir"/>.
+    /// Enables offline drift detection directly from schema files.
+    /// SQL Server DDL is accepted even in the community edition (text-only parsing, no live connection).
+    /// </summary>
+    [JsonPropertyName("ddl")]
+    public string? Ddl { get; set; }
 
     /// <summary>Type name from <see cref="TenantConfig.Types"/>.</summary>
     [JsonPropertyName("type")]

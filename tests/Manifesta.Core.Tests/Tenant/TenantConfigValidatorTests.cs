@@ -398,4 +398,152 @@ public sealed class TenantConfigValidatorTests
         config.Tenants.Databases["central-db"].Type.Should().Be("central");
         config.Tenants.Databases["partner-db"].Parent.Should().Be("central-db");
     }
+
+    // ── TENANT-NO-SOURCE ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void Validate_DatabaseHasNoSource_EmitsNoSource()
+    {
+        var config = ValidConfig();
+        // Remove all source fields from one database
+        config.Databases["partner-db"] = new TenantDatabaseEntry
+        {
+            Type = "partner", Parent = "central-db", Sections = ["Core"]
+            // connection, inputDir, and ddl all null
+        };
+
+        var result = Run(config);
+
+        HasIssue(result, "TENANT-NO-SOURCE", ValidationSeverity.Error);
+    }
+
+    [Fact]
+    public void Validate_DatabaseWithInputDir_IsValid()
+    {
+        var config = ValidConfig();
+        config.Databases["partner-db"] = new TenantDatabaseEntry
+        {
+            Type = "partner", Parent = "central-db", InputDir = "./snapshots/partner", Sections = ["Core"]
+        };
+
+        var result = Run(config);
+
+        NoIssue(result, "TENANT-NO-SOURCE");
+        NoIssue(result, "TENANT-MULTIPLE-SOURCES");
+        result.Issues.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Validate_DatabaseWithDdl_IsValid()
+    {
+        var config = ValidConfig();
+        config.Databases["partner-db"] = new TenantDatabaseEntry
+        {
+            Type = "partner", Parent = "central-db", Ddl = "./ddl/partner.sql", Sections = ["Core"]
+        };
+
+        var result = Run(config);
+
+        NoIssue(result, "TENANT-NO-SOURCE");
+        NoIssue(result, "TENANT-MULTIPLE-SOURCES");
+        result.Issues.Should().BeEmpty();
+    }
+
+    // ── TENANT-MULTIPLE-SOURCES ────────────────────────────────────────────────
+
+    [Fact]
+    public void Validate_DatabaseHasConnectionAndInputDir_EmitsMultipleSources()
+    {
+        var config = ValidConfig();
+        config.Databases["partner-db"] = new TenantDatabaseEntry
+        {
+            Type = "partner", Parent = "central-db", Connection = "Server=x;", InputDir = "./snapshots/partner", Sections = ["Core"]
+        };
+
+        var result = Run(config);
+
+        HasIssue(result, "TENANT-MULTIPLE-SOURCES", ValidationSeverity.Error);
+    }
+
+    [Fact]
+    public void Validate_DatabaseHasConnectionAndDdl_EmitsMultipleSources()
+    {
+        var config = ValidConfig();
+        config.Databases["partner-db"] = new TenantDatabaseEntry
+        {
+            Type = "partner", Parent = "central-db", Connection = "Server=x;", Ddl = "./schema.sql", Sections = ["Core"]
+        };
+
+        var result = Run(config);
+
+        HasIssue(result, "TENANT-MULTIPLE-SOURCES", ValidationSeverity.Error);
+    }
+
+    [Fact]
+    public void Validate_DatabaseHasInputDirAndDdl_EmitsMultipleSources()
+    {
+        var config = ValidConfig();
+        config.Databases["partner-db"] = new TenantDatabaseEntry
+        {
+            Type = "partner", Parent = "central-db", InputDir = "./snapshots/partner", Ddl = "./schema.sql", Sections = ["Core"]
+        };
+
+        var result = Run(config);
+
+        HasIssue(result, "TENANT-MULTIPLE-SOURCES", ValidationSeverity.Error);
+    }
+
+    // ── Offline-source config JSON round-trip ─────────────────────────────────
+
+    [Fact]
+    public void ManifestaConfig_TenantInputDir_RoundTrips()
+    {
+        var json = """
+            {
+              "tenants": {
+                "types": { "central": { "root": true } },
+                "databases": {
+                  "central-db": {
+                    "type": "central",
+                    "inputDir": "./snapshots/central",
+                    "sections": []
+                  }
+                }
+              }
+            }
+            """;
+
+        var config = System.Text.Json.JsonSerializer.Deserialize<ManifestaConfig>(json,
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+
+        config.Tenants!.Databases["central-db"].InputDir.Should().Be("./snapshots/central");
+        config.Tenants.Databases["central-db"].Connection.Should().BeNullOrEmpty();
+        config.Tenants.Databases["central-db"].Ddl.Should().BeNullOrEmpty();
+    }
+
+    [Fact]
+    public void ManifestaConfig_TenantDdl_RoundTrips()
+    {
+        var json = """
+            {
+              "tenants": {
+                "types": { "central": { "root": true } },
+                "databases": {
+                  "central-db": {
+                    "type": "central",
+                    "ddl": "./ddl/central.sql,./ddl/extensions.sql",
+                    "sections": []
+                  }
+                }
+              }
+            }
+            """;
+
+        var config = System.Text.Json.JsonSerializer.Deserialize<ManifestaConfig>(json,
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+
+        config.Tenants!.Databases["central-db"].Ddl.Should().Be("./ddl/central.sql,./ddl/extensions.sql");
+        config.Tenants.Databases["central-db"].Connection.Should().BeNullOrEmpty();
+        config.Tenants.Databases["central-db"].InputDir.Should().BeNullOrEmpty();
+    }
 }

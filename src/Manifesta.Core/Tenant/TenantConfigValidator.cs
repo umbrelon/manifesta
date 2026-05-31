@@ -42,6 +42,17 @@ public sealed class TenantConfigValidator
         {
             bool typeKnown = _config.Types.ContainsKey(db.Type);
 
+            // Rule 2b: exactly one source must be defined
+            var sourceCount = (string.IsNullOrWhiteSpace(db.Connection) ? 0 : 1)
+                            + (string.IsNullOrWhiteSpace(db.InputDir)   ? 0 : 1)
+                            + (string.IsNullOrWhiteSpace(db.Ddl)        ? 0 : 1);
+            if (sourceCount == 0)
+                issues.Add(Error("TENANT-NO-SOURCE",
+                    $"Database '{dbName}' has no source defined. Set exactly one of: 'connection', 'inputDir', or 'ddl'."));
+            else if (sourceCount > 1)
+                issues.Add(Error("TENANT-MULTIPLE-SOURCES",
+                    $"Database '{dbName}' defines multiple sources. 'connection', 'inputDir', and 'ddl' are mutually exclusive; provide exactly one."));
+
             // Rule 3: type must exist
             if (!typeKnown)
             {
