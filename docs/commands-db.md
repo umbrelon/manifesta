@@ -10,6 +10,7 @@
 - [db drift](#db-drift)
   - [db drift --ddl](#db-drift---ddl)
 - [db merge](#db-merge)
+- [db compare](#db-compare)
 
 ---
 
@@ -339,3 +340,79 @@ manifesta db merge --connection "..." --no-report
 | `1` | Merge completed with warnings (orphan columns or orphan tables in the registry) |
 | `4` | Invalid flags |
 | `5` | Duplicate table name found in the registry |
+
+---
+
+## db compare
+
+Compares two databases and reports schema differences — no repository JSON files involved. Each side can be a **live database connection** or a **DDL SQL file**, independently. Useful for verifying that two environments are in sync, comparing a DDL file against a live database, or diffing two DDL files entirely offline.
+
+> **SQL Server note:** live connections to SQL Server require the full edition. `--source-ddl` and `--target-ddl` accept `--provider sqlserver` in the community edition because DDL parsing is text-only and requires no live connection.
+
+```bash
+# Compare two live MySQL databases (staging vs. production)
+manifesta db compare \
+  --source "Server=staging;Database=mydb;Uid=root;Pwd=secret;" \
+  --target "Server=prod;Database=mydb;Uid=root;Pwd=secret;" \
+  --provider mysql
+
+# Compare a DDL file against the live PostgreSQL database
+manifesta db compare \
+  --source-ddl ./schema/v2.sql \
+  --target "Host=prod;Database=mydb;Username=postgres;Password=secret;" \
+  --provider postgres
+
+# Compare two DDL files offline — SQL Server provider accepted, no live connection needed
+manifesta db compare \
+  --source-ddl ./schema/v1.sql \
+  --target-ddl ./schema/v2.sql \
+  --provider sqlserver
+
+# Scope to specific schemas and write report to a custom path
+manifesta db compare \
+  --source "Host=staging;Database=mydb;Username=postgres;Password=secret;" \
+  --target "Host=prod;Database=mydb;Username=postgres;Password=secret;" \
+  --provider postgres \
+  --schema public,app \
+  --output ./reports/compare.md
+
+# Fail CI on warnings (tables in target not in source) in addition to drift
+manifesta db compare \
+  --source-ddl ./schema.sql \
+  --target "Host=prod;Database=mydb;Username=postgres;Password=secret;" \
+  --provider postgres \
+  --strict
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--source` | — | Connection string for the source environment (mutually exclusive with `--source-ddl`). SQL Server requires full edition. |
+| `--source-ddl` | — | Comma-separated paths to DDL SQL files for the source (mutually exclusive with `--source`). Accepts `sqlserver` provider. |
+| `--target` | — | Connection string for the target environment (mutually exclusive with `--target-ddl`). SQL Server requires full edition. |
+| `--target-ddl` | — | Comma-separated paths to DDL SQL files for the target (mutually exclusive with `--target`). Accepts `sqlserver` provider. |
+| `--schema` | all | With `--source`/`--target`: comma-separated schema filter (e.g. `public,app`), ignored for MySQL and SQLite. With `--source-ddl`/`--target-ddl`: prefix applied to unqualified table names. |
+| `--provider` | `mysql` | Database provider: `mysql`, `postgres`, `sqlite`. Also accepts `sqlserver` when both sides use `--source-ddl`/`--target-ddl`. |
+| `--strict` | `false` | Exit 1 on warnings (tables present in target but absent from source) |
+| `--include-schema` | `false` | Embed full before/after field listings for differing tables in the report |
+| `--output` | — | Full path for the compare report file |
+| `--output-dir` | `.` | Output directory (default filename: `compare.md`) |
+
+Each side requires exactly one of its two options: `--source` or `--source-ddl` for the source; `--target` or `--target-ddl` for the target. Providing both (e.g. `--source` and `--source-ddl`) is an error.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | No differences detected |
+| `1` | Differences detected, or warnings with `--strict` |
+| `2` | Connection error (either source or target) |
+| `4` | Configuration / flag error |
+
+**How source and target map to the report:**
+
+| Classification | Meaning |
+|---------------|---------|
+| ❌ Drift | Column/PK/FK difference between source and target, or table in source but absent from target |
+| ⚠ Warning | Table present in target but absent from source (suppressed without `--strict`) |

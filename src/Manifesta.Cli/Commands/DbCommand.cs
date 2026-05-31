@@ -119,6 +119,7 @@ public sealed class DbCommand : Command
         AddCommand(new DbDriftCommand());
         AddCommand(new DbExportCommand());
         AddCommand(new DbMergeCommand());
+        AddCommand(new DbCompareCommand());
     }
 }
 
@@ -700,5 +701,230 @@ public sealed class DbExportCommand : ManifestCommandBase
             globals);
 
         return (int)ExitCode.Success;
+    }
+}
+
+// ─── db compare ───────────────────────────────────────────────────────────
+
+public sealed class DbCompareCommand : ManifestCommandBase
+{
+    private readonly Option<string?>  _source        = new(["--source"],      () => null, "Connection string for the source environment (mutually exclusive with --source-ddl)");
+    private readonly Option<string?>  _target        = new(["--target"],      () => null, "Connection string for the target environment (mutually exclusive with --target-ddl)");
+    private readonly Option<string?>  _sourceDdl     = new(["--source-ddl"],  () => null,
+        "Comma-separated paths to DDL SQL files for the source (mutually exclusive with --source). " +
+        "Accepts mysql, postgres, sqlite, and sqlserver (no live connection required).");
+    private readonly Option<string?>  _targetDdl     = new(["--target-ddl"],  () => null,
+        "Comma-separated paths to DDL SQL files for the target (mutually exclusive with --target). " +
+        "Accepts mysql, postgres, sqlite, and sqlserver (no live connection required).");
+    private readonly Option<string?>  _schema        = new(["--schema"],      () => null,
+        "Schema handling — meaning depends on mode: " +
+        "with --source/--target: comma-separated schema filter (default: all, ignored for MySQL/SQLite); " +
+        "with --source-ddl/--target-ddl: prefix applied to unqualified table names.");
+    private readonly Option<bool>     _strict        = new(["--strict"],      () => false, "Exit 1 on warnings (e.g. tables present in target but absent from source)");
+    private readonly Option<bool>     _includeSchema = new(["--include-schema"], () => false, "Embed full before/after field listings for drifted tables in the report");
+    private readonly Option<string?>  _output        = new(["--output"],      () => null, "Full output file path (overrides --output-dir)");
+    private readonly Option<string?>  _outputDir     = new(["--output-dir"],  () => null, "Output directory");
+    private readonly Option<string>   _provider      = DbProviderHelper.ProviderOption;
+
+    public DbCompareCommand() : base("compare", "Compare two databases and report schema differences (live connection or DDL file)")
+    {
+        AddOption(_source);
+        AddOption(_target);
+        AddOption(_sourceDdl);
+        AddOption(_targetDdl);
+        AddOption(_schema);
+        AddOption(_strict);
+        AddOption(_includeSchema);
+        AddOption(_output);
+        AddOption(_outputDir);
+        AddOption(_provider);
+
+        this.SetHandler(context => InvokeBaseAsync(context));
+    }
+
+    protected override async Task<int> ExecuteAsync(GlobalOptions globals, InvocationContext context, CancellationToken ct)
+    {
+        var pr            = context.ParseResult;
+        var source        = pr.GetValueForOption(_source);
+        var target        = pr.GetValueForOption(_target);
+        var sourceDdl     = pr.GetValueForOption(_sourceDdl);
+        var targetDdl     = pr.GetValueForOption(_targetDdl);
+        var schemaFilter  = pr.GetValueForOption(_schema);
+        var strict        = pr.GetValueForOption(_strict);
+        var includeSchema = pr.GetValueForOption(_includeSchema);
+        var outputArg     = pr.GetValueForOption(_output);
+        var outputDir     = pr.GetValueForOption(_outputDir);
+        var providerStr   = pr.GetValueForOption(_provider);
+
+        // ── Validate flag combinations ─────────────────────────────────────────
+        if (!string.IsNullOrWhiteSpace(source) && !string.IsNullOrWhiteSpace(sourceDdl))
+            throw new ManifestaConfigException("--source and --source-ddl are mutually exclusive. Provide exactly one.");
+
+        if (!string.IsNullOrWhiteSpace(target) && !string.IsNullOrWhiteSpace(targetDdl))
+            throw new ManifestaConfigException("--target and --target-ddl are mutually exclusive. Provide exactly one.");
+
+        if (string.IsNullOrWhiteSpace(source) && string.IsNullOrWhiteSpace(sourceDdl))
+            throw new ManifestaConfigException("Either --source or --source-ddl must be provided.");
+
+        if (string.IsNullOrWhiteSpace(target) && string.IsNullOrWhiteSpace(targetDdl))
+            throw new ManifestaConfigException("Either --target or --target-ddl must be provided.");
+
+        // OSS: live connections use Parse() which rejects SQL Server.
+        //      DDL sides use ParseForDdl() which accepts sqlserver (text-only, no live connection).
+        //      If either side is live we use Parse() — SQL Server live is still enterprise-only.
+        var hasLiveSide = !string.IsNullOrWhiteSpace(source) || !string.IsNullOrWhiteSpace(target);
+        var provider    = hasLiveSide
+            ? DbProviderHelper.Parse(providerStr)       // rejects sqlserver for live connections
+            : DbProviderHelper.ParseForDdl(providerStr); // accepts sqlserver for DDL-only
+
+        // ── Load source ────────────────────────────────────────────────────────
+        IReadOnlyList<TableDefinition> sourceTables;
+        string sourceDescription;
+
+        if (!string.IsNullOrWhiteSpace(sourceDdl))
+        {
+            OutputFormatter.WriteVerbose($"Parsing source DDL file(s): {sourceDdl}…", globals);
+            var paths = sourceDdl.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            sourceTables      = DdlTableLoader.Load(paths, provider, schemaPrefix: schemaFilter);
+            sourceDescription = $"--source-ddl ({sourceDdl})";
+            OutputFormatter.WriteVerbose($"Source DDL tables parsed: {sourceTables.Count}", globals);
+        }
+        else
+        {
+            DbProviderHelper.WarnIfSchemaIgnored(schemaFilter, provider, globals);
+            OutputFormatter.WriteVerbose("Introspecting source database…", globals);
+            var introspector = DatabaseIntrospectorRegistry.GetFactory().Create(provider, source!);
+            IReadOnlyList<TableDefinition> tables;
+            try
+            {
+                tables = await introspector.IntrospectAsync(
+                    provider is DbProvider.MySql or DbProvider.Sqlite ? null : schemaFilter, ct);
+            }
+            catch (Exception ex)
+            {
+                throw new ManifestaSchemException($"Failed to introspect source database: {ex.Message}");
+            }
+            sourceTables      = tables;
+            sourceDescription = $"--source ({source})";
+        }
+
+        // ── Load target ────────────────────────────────────────────────────────
+        IReadOnlyList<TableDefinition> targetTables;
+        string targetDescription;
+
+        if (!string.IsNullOrWhiteSpace(targetDdl))
+        {
+            OutputFormatter.WriteVerbose($"Parsing target DDL file(s): {targetDdl}…", globals);
+            var paths = targetDdl.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            targetTables      = DdlTableLoader.Load(paths, provider, schemaPrefix: schemaFilter);
+            targetDescription = $"--target-ddl ({targetDdl})";
+            OutputFormatter.WriteVerbose($"Target DDL tables parsed: {targetTables.Count}", globals);
+        }
+        else
+        {
+            DbProviderHelper.WarnIfSchemaIgnored(schemaFilter, provider, globals);
+            OutputFormatter.WriteVerbose("Introspecting target database…", globals);
+            var introspector = DatabaseIntrospectorRegistry.GetFactory().Create(provider, target!);
+            IReadOnlyList<TableDefinition> tables;
+            try
+            {
+                tables = await introspector.IntrospectAsync(
+                    provider is DbProvider.MySql or DbProvider.Sqlite ? null : schemaFilter, ct);
+            }
+            catch (Exception ex)
+            {
+                throw new ManifestaSchemException($"Failed to introspect target database: {ex.Message}");
+            }
+            targetTables      = tables;
+            targetDescription = $"--target ({target})";
+        }
+
+        OutputFormatter.WriteVerbose(
+            $"Source: {sourceTables.Count} table(s), Target: {targetTables.Count} table(s)", globals);
+
+        // ── Diff ───────────────────────────────────────────────────────────────
+        var differ         = new TableDiffer();
+        var drifted        = new List<DriftResult>();
+        var clean          = new List<DriftResult>();
+        var extraInTarget  = new List<string>();
+        var sourceNames    = TableNames.NewSet();
+
+        var targetByName = new Dictionary<string, TableDefinition>(TableNames.Comparer);
+        foreach (var t in targetTables)
+            targetByName[t.Name] = t;
+
+        foreach (var sourceTable in sourceTables)
+        {
+            sourceNames.Add(sourceTable.Name);
+
+            if (targetByName.TryGetValue(sourceTable.Name, out var targetTable))
+            {
+                // Use table name as the "file path" identifier (no repo files in compare mode)
+                var result = differ.Diff(sourceTable, targetTable, sourceTable.Name);
+                if (result.HasDrift || result.HasWarnings)
+                    drifted.Add(result);
+                else
+                    clean.Add(result);
+            }
+            // else: present in source, absent from target → picked up as MissingDbTables below
+        }
+
+        // Tables in source but absent from target
+        var missingFromTarget = sourceTables
+            .Where(t => !targetByName.ContainsKey(t.Name))
+            .Select(t => t.Name)
+            .ToList();
+
+        // Tables in target but absent from source → ExtraDbTables (warnings)
+        foreach (var t in targetTables)
+        {
+            if (!sourceNames.Contains(t.Name))
+                extraInTarget.Add(t.Name);
+        }
+
+        // ── Assemble session ───────────────────────────────────────────────────
+        var session = new DriftSession
+        {
+            Source          = sourceDescription,
+            RootPath        = targetDescription,
+            Timestamp       = DateTimeOffset.UtcNow,
+            TotalLiveTables = targetTables.Count,
+            IncludeSchema   = includeSchema,
+            DriftedTables   = drifted.AsReadOnly(),
+            CleanTables     = clean.AsReadOnly(),
+            ExtraDbTables   = extraInTarget.AsReadOnly(),
+            MissingDbTables = missingFromTarget.AsReadOnly(),
+        };
+
+        // ── Write report ───────────────────────────────────────────────────────
+        var reportPath    = OutputPathResolver.Resolve(outputArg, outputDir, "compare.md");
+        var reportContent = new DriftReportGenerator().Generate(session, sourceLabel: "Source", targetLabel: "Target");
+        var writer        = new AtomicWriter();
+        await writer.WriteAsync(reportPath, reportContent, ct);
+        OutputFormatter.WriteVerbose($"Report written to: {reportPath}", globals);
+
+        // ── Summary output ─────────────────────────────────────────────────────
+        if (!session.HasDrift && !session.HasWarnings)
+        {
+            OutputFormatter.WriteLine(
+                $"No differences — {clean.Count} table(s) identical in both environments.", globals);
+            return (int)ExitCode.Success;
+        }
+
+        if (session.HasDrift)
+        {
+            OutputFormatter.WriteLine(
+                $"Differences detected — {drifted.Count} table(s) differ, " +
+                $"{missingFromTarget.Count} absent from target. See {reportPath}.",
+                globals);
+            return (int)ExitCode.ValidationErrors;
+        }
+
+        // Warnings only.
+        OutputFormatter.WriteLine(
+            $"Warnings: {extraInTarget.Count} table(s) in target have no source definition. See {reportPath}.",
+            globals);
+
+        return strict ? (int)ExitCode.ValidationErrors : (int)ExitCode.Success;
     }
 }

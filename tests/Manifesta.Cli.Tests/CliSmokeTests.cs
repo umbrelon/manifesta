@@ -1015,6 +1015,195 @@ public sealed class CliSmokeTests
         finally { Directory.Delete(tmp, recursive: true); }
     }
 
+    // ── db compare ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task DbCompare_Help_ShowsSourceDdlAndTargetDdl()
+    {
+        if (BinPath is null) return;
+        var (code, stdout, _) = await RunAsync("db", "compare", "--help");
+        code.Should().Be(0);
+        stdout.Should().Contain("--source-ddl");
+        stdout.Should().Contain("--target-ddl");
+        stdout.Should().Contain("sqlserver");   // mentioned in --source-ddl/--target-ddl description
+    }
+
+    [Fact]
+    public async Task DbCompare_NoFlags_ExitsWithConfigError()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var (code, _, stderr) = await RunAsync(tmp, "db", "compare");
+            code.Should().Be(4);
+            stderr.Should().Contain("--source");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DbCompare_SourceMutuallyExclusive_ExitsWithConfigError()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var (code, _, stderr) = await RunAsync(tmp,
+                "db", "compare",
+                "--source", "Server=x;", "--source-ddl", "schema.sql",
+                "--target-ddl", "schema.sql",
+                "--provider", "mysql");
+            code.Should().Be(4);
+            stderr.Should().Contain("mutually exclusive");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DbCompare_TargetMutuallyExclusive_ExitsWithConfigError()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var (code, _, stderr) = await RunAsync(tmp,
+                "db", "compare",
+                "--source-ddl", "schema.sql",
+                "--target", "Server=x;", "--target-ddl", "schema.sql",
+                "--provider", "mysql");
+            code.Should().Be(4);
+            stderr.Should().Contain("mutually exclusive");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DbCompare_DdlVsDdl_NoDiff_ExitsZero()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var ddl = Path.Combine(tmp, "schema.sql");
+            await File.WriteAllTextAsync(ddl, DdlCustomerSql);
+
+            var (code, stdout, stderr) = await RunAsync(tmp,
+                "db", "compare",
+                "--source-ddl", ddl,
+                "--target-ddl", ddl,
+                "--provider", "mysql");
+            code.Should().Be(0, because: stderr);
+            stdout.Should().Contain("No differences");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DbCompare_DdlVsDdl_TypeChanged_ExitsOne()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var src = Path.Combine(tmp, "source.sql");
+            var tgt = Path.Combine(tmp, "target.sql");
+            await File.WriteAllTextAsync(src, DdlCustomerSql);
+            await File.WriteAllTextAsync(tgt, DdlCustomerSql.Replace("VARCHAR(255)", "VARCHAR(100)"));
+
+            var (code, stdout, stderr) = await RunAsync(tmp,
+                "db", "compare",
+                "--source-ddl", src,
+                "--target-ddl", tgt,
+                "--provider", "mysql");
+            code.Should().Be(1, because: stderr);
+            stdout.Should().Contain("Differences detected");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DbCompare_DdlVsDdl_SqlServerProvider_Accepted()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var sql = """
+                CREATE TABLE [dbo].[Customer] (
+                    [Id]   INT            NOT NULL,
+                    [Name] NVARCHAR(255)  NULL,
+                    PRIMARY KEY ([Id])
+                );
+                """;
+            var ddl = Path.Combine(tmp, "schema.sql");
+            await File.WriteAllTextAsync(ddl, sql);
+
+            var (code, stdout, stderr) = await RunAsync(tmp,
+                "db", "compare",
+                "--source-ddl", ddl,
+                "--target-ddl", ddl,
+                "--provider", "sqlserver");
+            code.Should().Be(0, because: stderr);
+            stdout.Should().Contain("No differences");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DbCompare_DdlVsDdl_ParseError_ExitsCode4()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var bad = Path.Combine(tmp, "bad.sql");
+            await File.WriteAllTextAsync(bad, "this is not valid SQL CREATE TABLE garbage (((");
+
+            var (code, _, _) = await RunAsync(tmp,
+                "db", "compare",
+                "--source-ddl", bad,
+                "--target-ddl", bad,
+                "--provider", "mysql");
+            code.Should().Be(4);
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DbCompare_DdlVsDdl_WritesReportFile()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var src = Path.Combine(tmp, "source.sql");
+            var tgt = Path.Combine(tmp, "target.sql");
+            var outDir = Path.Combine(tmp, "reports");
+            Directory.CreateDirectory(outDir);
+            await File.WriteAllTextAsync(src, DdlCustomerSql);
+            await File.WriteAllTextAsync(tgt, DdlCustomerSql.Replace("VARCHAR(255)", "VARCHAR(100)"));
+
+            var (code, _, stderr) = await RunAsync(tmp,
+                "db", "compare",
+                "--source-ddl", src,
+                "--target-ddl", tgt,
+                "--provider", "mysql",
+                "--output-dir", outDir);
+            code.Should().Be(1, because: stderr);
+            File.Exists(Path.Combine(outDir, "compare.md")).Should().BeTrue();
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
     // ── db merge ─────────────────────────────────────────────────────────────
 
     [Fact]
