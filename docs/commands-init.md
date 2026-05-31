@@ -224,6 +224,9 @@ manifesta init sql --input dump.sql --schema dbo --provider sqlserver
 # than inline in CREATE TABLE — common in SQL Server scripts and instawdb.sql style dumps
 manifesta init sql --input instawdb.sql --provider sqlserver --include-migrations
 
+# Skip CREATE VIEW output — useful for DDL-based drift detection (see below)
+manifesta init sql --input schema.sql --provider sqlserver --no-views
+
 # Overwrite existing table.json files
 manifesta init sql --input schema.sql --overwrite
 
@@ -240,6 +243,7 @@ manifesta init sql --input schema.sql --dry-run
 | `--provider` | No | `mysql` | SQL dialect: `mysql`, `postgres`, `sqlite`, `sqlserver` |
 | `--schema` | No | — | Schema prefix applied to tables that have no schema qualifier (e.g. `dbo`) |
 | `--include-migrations` | No | false | Also process `ALTER TABLE` statements that appear after `CREATE TABLE` blocks. Required when PKs and FKs are declared via `ALTER TABLE ADD CONSTRAINT` rather than inline — common in SQL Server T-SQL scripts. |
+| `--no-views` | No | false | Skip writing JSON files for `CREATE VIEW` statements. Useful when generating a temporary snapshot for DDL-based drift detection — views parsed from DDL have column types set to `"unknown"`, which would produce false-positive drift against repo view files that have real types. |
 | `--overwrite` | No | false | Overwrite existing `table.json` files |
 | `--recursive` / `-r` | No | false | Expand a plain filename `--pattern` to all subdirectories (prepends `**/`). Ignored when `--pattern` already contains a path separator or `**`, and when `--input` is a single file |
 | `--pattern` | No | `*.sql` | Glob pattern for file matching when `--input` is a directory. **Plain filename patterns** (e.g. `*_up.sql`) are controlled by `--recursive`. **Path globs** (e.g. `2024/**/*.sql`, `**/create_*.sql`) are matched directly and ignore `--recursive` |
@@ -308,6 +312,27 @@ SQL Server-specific behaviour:
 | XML schema collections | `xml([schema].[collection])` column types are normalised to bare `xml` — matching the form returned by the SQL Server introspector. |
 
 To bootstrap from a SQL Server database (rather than a DDL file), use the `init db` command from the full edition.
+
+**DDL-based drift detection (two-phase workflow):**
+
+Use `init sql` together with `db drift` to detect schema drift between your DDL files and your repo JSON files without a live database connection. Use `--no-views` to suppress view output because views parsed from DDL have column types set to `"unknown"`, which would produce false-positive drift against repo view files that already have real types from a previous `db merge`.
+
+```bash
+# Phase 1 — parse DDL into a temporary snapshot
+manifesta init sql \
+  --input ./modules \
+  --recursive \
+  --provider sqlserver \
+  --default-schema dbo \
+  --no-views \
+  --overwrite \
+  --output-dir /tmp/manifesta/tables
+
+# Phase 2 — compare snapshot against repo JSON files
+manifesta db drift \
+  --input-dir /tmp/manifesta/tables \
+  --config ./modules/_/manifesta.config.json
+```
 
 **Exit codes:**
 

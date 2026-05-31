@@ -102,6 +102,12 @@ public sealed class InitSqlCommand : ManifestSharedCommandBase
         "ALTER/MODIFY COLUMN, DROP COLUMN, RENAME COLUMN. " +
         "Opt-in because migration files may contain partial or environment-specific statements " +
         "that should not be applied blindly to the registry.");
+    private readonly Option<bool>    _noViews           = new(["--no-views"],
+        () => false,
+        "Skip writing JSON files for CREATE VIEW statements. " +
+        "Useful when using init sql to generate a temporary snapshot for drift detection, " +
+        "because views parsed from DDL have column types set to 'unknown' which would " +
+        "produce false-positive drift against repo view files that have real types.");
 
     public InitSqlCommand() : base("sql",
         "Parse SQL DDL files and write one table-definition JSON per table")
@@ -117,6 +123,7 @@ public sealed class InitSqlCommand : ManifestSharedCommandBase
         AddOption(_pattern);
         AddOption(_lastWins);
         AddOption(_includeMigrations);
+        AddOption(_noViews);
 
         this.SetHandler(context => InvokeBaseAsync(context));
     }
@@ -135,6 +142,7 @@ public sealed class InitSqlCommand : ManifestSharedCommandBase
         var pattern       = pr.GetValueForOption(_pattern) ?? "*.sql";
         var lastWins           = pr.GetValueForOption(_lastWins);
         var includeMigrations  = pr.GetValueForOption(_includeMigrations);
+        var noViews            = pr.GetValueForOption(_noViews);
 
         // MySQL and SQLite have no schema namespace — both schema flags are no-ops.
         if (provider is DbProvider.MySql or DbProvider.Sqlite)
@@ -456,8 +464,10 @@ public sealed class InitSqlCommand : ManifestSharedCommandBase
         // ── Write view files (CREATE VIEW) — stored alongside table files ────────
         // Views have IsView = true and field types set to "unknown"; db merge will
         // populate real types from the live database.
+        // Skipped when --no-views is set (e.g. DDL-based drift detection, where unknown
+        // types would produce false-positive drift against repo views with real types).
         int viewsWritten = 0;
-        foreach (var view in allViews)
+        foreach (var view in noViews ? [] : allViews)
         {
             var outputFile = Path.Combine(outputDir, $"{view.Name}.json");
             if (!overwrite && File.Exists(outputFile))
@@ -539,6 +549,7 @@ public sealed class InitSqlCommand : ManifestSharedCommandBase
         OutputFormatter.WriteLine(
             $"Imported {written} table(s)" +
             (viewsWritten  > 0 ? $", {viewsWritten} view(s)" : "") +
+            (noViews && allViews.Count > 0 ? $" ({allViews.Count} view(s) skipped via --no-views)" : "") +
             " from SQL DDL" +
             (skipped       > 0 ? $", {skipped} skipped (already exist)" : "") +
             (filesWithDups > 0 ? $", {filesWithDups} file(s) skipped (intra-file duplicate tables — see warnings)" : "") +

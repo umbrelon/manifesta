@@ -1625,6 +1625,68 @@ public sealed class CliSmokeTests
         finally { Directory.Delete(tmp, recursive: true); }
     }
 
+    // ── init sql --no-views ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task InitSql_NoViews_SkipsViewFiles()
+    {
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, "schema.sql"), """
+                CREATE TABLE Customer (Id INT NOT NULL PRIMARY KEY);
+                CREATE VIEW vw_Customer AS SELECT Id FROM Customer;
+                """);
+
+            var outDir = Path.Combine(tmp, "out");
+            var (code, stdout, stderr) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",      "schema.sql",
+                "--output-dir", outDir,
+                "--provider",   "mysql",
+                "--no-views");
+
+            code.Should().Be(0, because: stderr);
+            // Only the table JSON must be written; view must be absent.
+            Directory.GetFiles(outDir, "*.json").Should().HaveCount(1);
+            Directory.GetFiles(outDir, "*.json")[0].Should().Contain("Customer");
+            Directory.GetFiles(outDir, "*.json")[0].Should().NotContain("vw_");
+            // Summary mentions the skipped view count.
+            stdout.Should().Contain("skipped via --no-views");
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
+    [Fact]
+    public async Task InitSql_WithoutNoViews_WritesViewFile()
+    {
+        // Verify the baseline: without --no-views, a CREATE VIEW produces a JSON file.
+        if (BinPath is null) return;
+        var tmp = Path.Combine(Path.GetTempPath(), $"manifesta-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, "schema.sql"), """
+                CREATE TABLE Customer (Id INT NOT NULL PRIMARY KEY);
+                CREATE VIEW vw_Customer AS SELECT Id FROM Customer;
+                """);
+
+            var outDir = Path.Combine(tmp, "out");
+            var (code, _, stderr) = await RunAsync(tmp,
+                "init", "sql",
+                "--input",      "schema.sql",
+                "--output-dir", outDir,
+                "--provider",   "mysql");
+
+            code.Should().Be(0, because: stderr);
+            // Both table and view JSON must be written.
+            Directory.GetFiles(outDir, "*.json").Should().HaveCount(2);
+        }
+        finally { Directory.Delete(tmp, recursive: true); }
+    }
+
     // ── dev ───────────────────────────────────────────────────────────────────
 
     [Fact]
