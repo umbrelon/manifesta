@@ -8,7 +8,7 @@
 
 - [db export](#db-export)
 - [db drift](#db-drift)
-  - [db drift --ddl-file](#db-drift---ddl-file)
+  - [db drift --ddl](#db-drift---ddl)
 - [db merge](#db-merge)
 
 ---
@@ -89,7 +89,7 @@ Three input modes are available — exactly one must be provided:
 |------|------|:--------------:|:----------:|
 | Live database | `--connection` | Yes | Full edition |
 | Pre-exported JSON | `--input-dir` | No | Full edition |
-| SQL DDL files | `--ddl-file` | No | **Yes (OSS)** |
+| SQL DDL files | `--ddl` | No | **Yes (OSS)** |
 
 ```bash
 # Compare against a live MySQL database
@@ -102,12 +102,11 @@ manifesta db drift --provider postgres --connection "Host=localhost;Database=myd
 manifesta db drift --input-dir ./exported-tables
 
 # Compare against SQL DDL files — all four providers, no connection required
-manifesta db drift --ddl-file schema.sql --provider mysql
-manifesta db drift --ddl-file schema.sql --provider sqlserver
+manifesta db drift --ddl schema.sql --provider mysql
+manifesta db drift --ddl schema.sql --provider sqlserver
 
-# DDL file directory — recursive with pattern filter
-manifesta db drift --ddl-file ./migrations --provider mysql --recursive
-manifesta db drift --ddl-file ./migrations --provider mysql --pattern "**/*_up.sql"
+# Multiple DDL files (comma-separated)
+manifesta db drift --ddl schema.sql,views.sql --provider postgres
 
 # Restrict to specific schemas (connection/input-dir modes; PostgreSQL example)
 manifesta db drift --provider postgres --connection "..." --schema public,app
@@ -128,11 +127,9 @@ manifesta db drift --connection "..." --output-dir ./reports
 |------|----------|---------|-------------|
 | `--connection` | One of three | — | ADO.NET connection string for the live database |
 | `--input-dir` | One of three | — | Directory of pre-exported `table.json` files to treat as the live snapshot |
-| `--ddl-file` | One of three | — | Path to a `.sql` file or directory of `.sql` files to diff against the registry. Supports `mysql`, `postgres`, `sqlite`, and `sqlserver` (no live connection required). |
-| `--provider` | No | `mysql` | Database provider: `mysql`, `postgres`, `sqlite`. Also accepts `sqlserver` when used with `--ddl-file`. |
-| `--schema` | No | — | **With `--connection`/`--input-dir`:** comma-separated schema filter (e.g. `public,app`); ignored for MySQL/SQLite. **With `--ddl-file`:** prefix applied to unqualified table names in the DDL (same as `init sql --schema`). |
-| `--recursive` / `-r` | No | false | Expand a plain filename `--pattern` to all subdirectories. Only applicable when `--ddl-file` is a directory. |
-| `--pattern` | No | `*.sql` | Glob pattern for file matching when `--ddl-file` is a directory. Plain filename patterns (e.g. `*_up.sql`) are controlled by `--recursive`. Path globs (e.g. `2024/**/*.sql`) are matched directly. |
+| `--ddl` | One of three | — | Comma-separated paths to `.sql` DDL files to diff against the registry. Supports `mysql`, `postgres`, `sqlite`, and `sqlserver` (no live connection required). |
+| `--provider` | No | `mysql` | Database provider: `mysql`, `postgres`, `sqlite`. Also accepts `sqlserver` when used with `--ddl`. |
+| `--schema` | No | — | **With `--connection`/`--input-dir`:** comma-separated schema filter (e.g. `public,app`); ignored for MySQL/SQLite. **With `--ddl`:** prefix applied to unqualified table names in the DDL (same as `init sql --schema`). |
 | `--strict` | No | false | Exit 1 on warnings (extra columns or tables in source not present in the registry) |
 | `--include-schema` | No | false | Embed full before/after field listings for each drifted table in the report |
 | `--no-fk-drifts` | No | false | Suppress FK change rows from the per-table drift sections |
@@ -141,13 +138,13 @@ manifesta db drift --connection "..." --output-dir ./reports
 | `--output` | No | — | Full path for the drift report file |
 | `--output-dir` | No | `.` | Directory for the drift report file |
 
-`--connection`, `--input-dir`, and `--ddl-file` are mutually exclusive. Exactly one must be provided.
+`--connection`, `--input-dir`, and `--ddl` are mutually exclusive. Exactly one must be provided.
 
 ---
 
-### db drift --ddl-file
+### db drift --ddl
 
-`--ddl-file` parses one or more SQL `CREATE TABLE` files using the same engine as `init sql` and feeds the result directly into the standard drift pipeline. No database connection is required, and **SQL Server is supported in the OSS edition**.
+`--ddl` parses one or more SQL `CREATE TABLE` files using the same engine as `init sql` and feeds the result directly into the standard drift pipeline. No database connection is required, and **SQL Server is supported in the OSS edition**.
 
 This is the primary CI pattern when:
 - Your database is SQL Server (live introspection requires the full edition)
@@ -156,30 +153,22 @@ This is the primary CI pattern when:
 
 ```bash
 # Verify a single T-SQL file matches the registry
-manifesta db drift --ddl-file tables.sql --provider sqlserver
+manifesta db drift --ddl tables.sql --provider sqlserver
 
 # Apply a schema prefix to unqualified DDL names — same as init sql --schema
-manifesta db drift --ddl-file tables.sql --provider sqlserver --schema dbo
+manifesta db drift --ddl tables.sql --provider sqlserver --schema dbo
 
-# CI pipeline: verify all up-migrations across a nested directory
-manifesta db drift \
-  --ddl-file  ./migrations \
-  --provider  mysql \
-  --pattern   "**/*_up.sql"
+# Multiple DDL files comma-separated
+manifesta db drift --ddl schema.sql,indexes.sql --provider postgres
 ```
 
-**`--schema` behaviour with `--ddl-file`:**
+**`--schema` behaviour with `--ddl`:**
 
 When a DDL file contains unqualified table names (e.g. `CREATE TABLE Customer`), the registry JSON typically stores qualified names (e.g. `dbo.Customer`). Use `--schema dbo` to apply the prefix during parsing — this is the same flag used when you originally ran `init sql --schema dbo`.
 
-**Parse errors and `--warn-only`:**
+**Parse errors:**
 
-If the DDL file contains errors, the command exits `1` before running the diff — a partial parse could produce a misleading report. Use `--warn-only` to suppress this and proceed with best-effort results (useful when the DDL contains statements that Manifesta doesn't support, such as `CREATE INDEX` or stored procedure definitions).
-
-```bash
-# Proceed despite parse errors — only successfully parsed tables are compared
-manifesta db drift --ddl-file schema.sql --provider mysql --warn-only
-```
+If a DDL file contains errors, `DdlTableLoader` throws immediately before running the diff — a partial parse could produce a misleading report.
 
 ---
 
@@ -229,9 +218,9 @@ Logical and virtual FKs are always ignored — they are repo-sovereign and have 
 | Code | Meaning |
 |------|---------|
 | `0` | No drift detected; registry and source are in sync |
-| `1` | Drift detected; warnings present with `--strict`; or DDL parse errors (use `--warn-only` to override) |
-| `4` | Invalid flags (wrong combination of `--connection`, `--input-dir`, `--ddl-file`) |
-| `5` | Duplicate table name in registry, or no files matched `--pattern` |
+| `1` | Drift detected; or warnings present with `--strict` |
+| `4` | Invalid flags (wrong combination of `--connection`, `--input-dir`, `--ddl`; or DDL parse errors) |
+| `5` | Duplicate table name in registry or in DDL files |
 
 ---
 
